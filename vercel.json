@@ -3,7 +3,7 @@
   "crons": [
     {
       "path": "/api/cron/inventory",
-      "schedule": "0 2 * * *"
+      "schedule": "30 1 * * *"
     }
   ]
 }

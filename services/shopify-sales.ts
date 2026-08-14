@@ -30,11 +30,11 @@ export async function fetchSalesReport(days = 30): Promise<SalesReport> {
     pageInfo = data.orders.pageInfo;
   }
   const currency = orders[0]?.currency ?? "INR";
-  const dailyMap = new Map<string, { date: string; orders: number; revenue: number; refunds: number }>();
-  for (let cursor = new Date(`${from}T00:00:00Z`); cursor <= toDate; cursor.setUTCDate(cursor.getUTCDate() + 1)) { const date = cursor.toISOString().slice(0, 10); dailyMap.set(date, { date, orders: 0, revenue: 0, refunds: 0 }); }
+  const dailyMap = new Map<string, { date: string; orders: number; units: number; revenue: number; refunds: number }>();
+  for (let cursor = new Date(`${from}T00:00:00Z`); cursor <= toDate; cursor.setUTCDate(cursor.getUTCDate() + 1)) { const date = cursor.toISOString().slice(0, 10); dailyMap.set(date, { date, orders: 0, units: 0, revenue: 0, refunds: 0 }); }
   const productMap = new Map<string, { productId: string | null; title: string; units: number; revenue: number }>();
   for (const order of orders) {
-    const day = dailyMap.get(order.processedAt.slice(0, 10)); if (day) { day.orders += 1; day.revenue += order.revenue; day.refunds += order.refunds; }
+    const day = dailyMap.get(order.processedAt.slice(0, 10)); if (day) { day.orders += 1; day.units += order.cancelledAt ? 0 : order.lines.reduce((sum, line) => sum + line.currentQuantity, 0); day.revenue += order.revenue; day.refunds += order.refunds; }
     for (const line of order.lines) { const key = line.productId ?? line.productTitle; const product = productMap.get(key) ?? { productId: line.productId, title: line.productTitle, units: 0, revenue: 0 }; product.units += line.quantity; product.revenue += line.revenue; productMap.set(key, product); }
   }
   const grossRevenue = orders.reduce((sum, order) => sum + order.revenue, 0); const refunds = orders.reduce((sum, order) => sum + order.refunds, 0); const netRevenue = grossRevenue - refunds;

@@ -30,6 +30,10 @@ SESSION_SECRET=at-least-32-random-characters-used-to-sign-sessions
 
 CRON_SECRET=a-long-random-secret
 BLOB_READ_WRITE_TOKEN=your-vercel-blob-token
+
+RESEND_API_KEY=re_your-resend-api-key
+ALERT_EMAIL_FROM=Vasudha Command Center <alerts@your-verified-domain.com>
+ALERT_EMAIL_TO=prabhu@example.com
 ```
 
 Never commit `.env.local`, expose these values through `NEXT_PUBLIC_` variables, or share them in screenshots.
@@ -65,12 +69,12 @@ Use a unique password of at least 12 characters and a cryptographically random `
 - Dashboard and inventory pages provide manual refresh, manual snapshot creation, missing-snapshot warnings, the last successful snapshot time, and recent cron/manual execution history.
 - Settings are stored privately in Vercel Blob and include default/per-product low-stock thresholds, lead time, safety stock, dead-stock window, and default hiding of untracked variants.
 - Stock planning estimates daily depletion, days until stockout, reorder quantities, inventory/no-movement age, and dead stock from up to 60 daily snapshots. These are planning estimates, not accounting forecasts.
-- A successful scheduled snapshot can send a daily email through Resend and/or an approved WhatsApp Cloud API template. Manual snapshots do not send duplicate alerts. Channels are disabled until credentials are configured and explicitly enabled in Settings.
+- A successful scheduled snapshot sends a daily email through Resend when its credentials are configured and the email channel is enabled in Settings. New installations enable email by default; existing installations should confirm the toggle in Settings. Manual snapshots do not send duplicate alerts.
 - The Sales workspace reports 30-day orders, revenue, AOV, refunds, cancellations, best/slow products, sales-versus-stock, and a simple run-rate forecast. It requires `read_orders`; standard Shopify order access covers the most recent 60 days.
 
 ## Daily snapshots
 
-Vercel Cron calls `GET /api/cron/inventory` at `02:00 UTC`, or `07:30 IST`, every day. The route fetches current Shopify inventory and writes a private document to:
+Vercel Cron calls `GET /api/cron/inventory` at `01:30 UTC`, or `07:00 IST`, every day. The route fetches current Shopify inventory, writes a private document, and sends the configured Resend summary email to `ALERT_EMAIL_TO`:
 
 ```text
 inventory-snapshots/YYYY-MM-DD.json
@@ -112,6 +116,7 @@ npm run build
 1. Configure all environment variables for the Vercel Production environment.
 2. Connect a private Vercel Blob store to the project.
 3. Deploy the application.
-4. Confirm an unauthenticated request redirects to `/login`.
-5. Sign in and verify current inventory against Shopify.
-6. Confirm the next scheduled cron execution returns `200` and creates the dated snapshot.
+4. Verify the domain used by `ALERT_EMAIL_FROM` in Resend and enable **Daily email summary** under Settings (existing installations only).
+5. Confirm an unauthenticated request redirects to `/login`.
+6. Sign in and verify current inventory against Shopify.
+7. Confirm the next scheduled cron execution returns `200`, creates the dated snapshot, and records the email result in the snapshot run.

@@ -14,7 +14,7 @@ export const DEFAULT_OPERATIONS_SETTINGS: OperationsSettings = {
   deadStockDays: 30,
   hideUntrackedByDefault: false,
   productThresholds: {},
-  alerts: { emailEnabled: false, whatsappEnabled: false },
+  alerts: { emailEnabled: true, whatsappEnabled: false },
   updatedAt: null,
 };
 

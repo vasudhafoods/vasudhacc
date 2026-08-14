@@ -1,87 +1,35 @@
-import { InventoryTrendChart } from "@/components/charts/inventory-trend-chart";
-import { MovementList } from "@/components/dashboard/movement-list";
-import { SummaryCard } from "@/components/dashboard/summary-card";
-import { SnapshotStatusStrip } from "@/components/inventory/snapshot-status-strip";
-import { Icon } from "@/components/ui/icon";
-import { formatQuantity } from "@/lib/comparison/inventory";
-import { getInventoryFeed } from "@/lib/inventory/live-data";
+import Link from "next/link";
 import { connection } from "next/server";
 import { requireDashboardSession } from "@/lib/auth/authorization";
-import { SnapshotControls } from "@/components/inventory/snapshot-controls";
-import { readSnapshotRuns } from "@/services/operations-store";
+import { getCommandCenterView } from "@/services/command-center";
+import type { CommandCenterDecision, CommandCenterHealth } from "@/types/command-center";
+
+const integer = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
 
 export default async function Home() {
-  await requireDashboardSession();
-  await connection();
-  const [feed, runs] = await Promise.all([getInventoryFeed(), readSnapshotRuns(10)]);
-  const isError = feed.mode === "error";
-  const hasYesterday = feed.snapshotAvailability.yesterday;
-  const hasDayBefore = feed.snapshotAvailability.dayBeforeYesterday;
-  const historyCount = Number(hasYesterday) + Number(hasDayBefore);
-  const change = hasYesterday ? feed.summary.today - feed.summary.yesterday : 0;
-  const reductions = [...feed.items].filter((item) => item.todayChange < 0).sort((a, b) => a.todayChange - b.todayChange).slice(0, 4);
-  const additions = [...feed.items].filter((item) => item.todayChange > 0).sort((a, b) => b.todayChange - a.todayChange).slice(0, 4);
-  const attention = feed.items.filter((item) => item.status === "low-stock" || item.status === "out-of-stock");
-  const attentionProducts = new Set(attention.map((item) => item.productId)).size;
-
+  await requireDashboardSession(); await connection();
+  const view = await getCommandCenterView();
   return <div className="space-y-7">
-    <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-      <div>
-        <p className="text-xs font-medium text-[#2d725f]">Inventory overview</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Good morning, Vasudha</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          {feed.mode === "current"
-            ? "Today is live from Shopify; prior days come from dated snapshots."
-            : feed.mode === "snapshot"
-              ? "Shopify is temporarily unavailable, so the latest saved inventory is shown."
-              : "Shopify could not be loaded, so this view is currently empty."}
-        </p>
-      </div>
-    </div>
-    <SnapshotStatusStrip feed={feed}/>
-    <SnapshotControls today={feed.inventoryDates.today} latestSnapshotDate={feed.latestSnapshotDate} runs={runs}/>
-    {isError ? (
-      <section className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-rose-950">
-        <h2 className="text-sm font-semibold">Shopify connection needs attention</h2>
-        <p className="mt-2 text-sm text-rose-900/80">We could not pull your live inventory, so no demo products are being shown.</p>
-        <p className="mt-2 text-xs text-rose-900/70">Check the store domain, app installation, and scopes.</p>
-      </section>
-    ) : null}
+    <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#2d725f]">Commerce + Warehouse</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Decision Command Center</h1><p className="mt-1 max-w-2xl text-sm text-slate-500">Live Shopify stock and demand are connected. Warehouse allocation remains separated until its transactional source of truth is added.</p></div><div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800"><span className="size-2 rounded-full bg-emerald-500"/>Shopify {view.mode === "live" ? "connected" : view.mode === "snapshot" ? "snapshot fallback" : "unavailable"}</div></header>
+
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <SummaryCard label="Today's inventory" value={feed.summary.today} helper={feed.mode === "current" ? "Live Shopify inventory" : "Latest saved inventory"} icon="box" tone={hasYesterday ? (change >= 0 ? "positive" : "danger") : "neutral"}/>
-      <SummaryCard label={hasYesterday ? "Yesterday's inventory" : "Tracked products"} value={hasYesterday ? feed.summary.yesterday : feed.summary.products} helper={hasYesterday ? `Snapshot · ${feed.inventoryDates.yesterday}` : "Waiting for yesterday's snapshot"} icon="inventory"/>
-      <SummaryCard label={hasDayBefore ? "Day-before inventory" : "Tracked locations"} value={hasDayBefore ? feed.summary.dayBeforeYesterday : feed.summary.locations} helper={hasDayBefore ? `Snapshot · ${feed.inventoryDates.dayBeforeYesterday}` : "Waiting for day-before snapshot"} icon="orders"/>
-      <SummaryCard label="Products requiring attention" value={attentionProducts} helper="Unique products with low or out-of-stock variants" icon="warning" tone="warning"/>
+      <Metric label="Online stock" value={integer.format(view.onlineStock)} helper="Actual Shopify available" tone="green"/><UnavailableMetric label="Retail stock"/><UnavailableMetric label="Buffer stock"/><UnavailableMetric label="Total physical stock"/>
+      <Metric label="Shopify units today" value={value(view.onlineUnitsToday)} helper="Current order quantities"/><Metric label="Shopify orders today" value={value(view.shopifyOrdersToday)} helper={view.salesError ? "Order access needs attention" : "Processed today"}/><Metric label="Average online demand" value={view.averageDailyOnlineUnits === null ? "—" : `${view.averageDailyOnlineUnits}/day`} helper="Recent 30-day run rate"/><Metric label="SKUs requiring attention" value={integer.format(view.lowStockSkus + view.outOfStockSkus)} helper={`${view.outOfStockSkus} out · ${view.lowStockSkus} low`} tone="amber"/>
     </section>
-    <section className="grid gap-4 sm:grid-cols-3">
-      <SummaryCard label="Total products" value={feed.summary.products} helper="Across all locations" icon="inventory"/>
-      <SummaryCard label="Low stock" value={feed.summary.lowStock} helper="Using configured thresholds" icon="warning" tone="warning"/>
-      <SummaryCard label="Out of stock" value={feed.summary.outOfStock} helper="Immediate action required" icon="warning" tone="danger"/>
+
+    <section className="grid gap-5 xl:grid-cols-[1.45fr_.8fr]">
+      <div className="rounded-xl border border-slate-200 bg-white"><div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4"><div><h2 className="text-sm font-semibold text-slate-900">Decision required</h2><p className="mt-1 text-xs text-slate-500">Detect → explain → recommend. Execution stays disabled until safe warehouse balances exist.</p></div><Link href="/attention" className="shrink-0 text-xs font-semibold text-emerald-700">View all stock alerts</Link></div><div className="divide-y divide-slate-100">{view.decisions.map((decision) => <Decision key={decision.id} decision={decision}/>)}{!view.decisions.length ? <div className="p-8 text-center"><p className="text-sm font-semibold text-slate-700">No demand-based decision is urgent</p><p className="mt-1 text-xs text-slate-500">The queue will populate when stock cover falls below 10 days.</p></div> : null}</div></div>
+      <div className="space-y-5"><section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-sm font-semibold text-slate-900">SKU identity health</h2><div className="mt-5 grid grid-cols-2 gap-3"><MiniMetric label="Mapped rows" value={view.mappedSkus}/><MiniMetric label="Missing SKU" value={view.missingSkus} danger={view.missingSkus > 0}/></div><p className="mt-4 text-xs leading-5 text-slate-500">Shopify inventory-item SKU is primary, with variant SKU as fallback. Missing SKUs must be resolved before warehouse stock is imported.</p><Link href="/inventory" className="mt-4 inline-flex text-xs font-semibold text-emerald-700">Review inventory identities →</Link></section><section className="rounded-xl border border-blue-200 bg-blue-50 p-5"><p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Warehouse foundation required</p><h2 className="mt-2 text-sm font-semibold text-slate-900">Connect transactional inventory</h2><p className="mt-2 text-xs leading-5 text-slate-600">Retail, Buffer, physical totals, transfers, receiving and approvals are intentionally unavailable—not treated as zero. They require atomic balances, an immutable ledger and an integration outbox.</p></section></div>
     </section>
-    <section className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
-      <div className="rounded-xl border border-slate-200/80 bg-white p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-800">Inventory trend</h2>
-            <p className="mt-1 text-xs text-slate-400">Saved morning snapshots plus current live stock</p>
-          </div>
-          <div className={`rounded-md px-2 py-1 text-xs font-semibold ${hasYesterday && change < 0 ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-700"}`}>
-            {hasYesterday ? `${change >= 0 ? "+" : ""}${change} vs yesterday` : "Live now"}
-          </div>
-        </div>
-        <div className="mt-4"><InventoryTrendChart data={feed.dailyTotals}/></div>
-      </div>
-      <div className="rounded-xl border border-slate-200/80 bg-white">
-        <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-sm font-semibold text-slate-800">Products requiring attention</h2><p className="mt-1 text-[11px] text-slate-400">Prioritised by stock level</p></div>
-        <div className="divide-y divide-slate-100">{attention.map((item) => <div key={`${item.inventoryItemId}-${item.locationId}`} className="flex items-center gap-3 px-5 py-4"><div className={`grid size-9 place-items-center rounded-lg ${item.today <= 0 ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}><Icon name="warning" className="size-4"/></div><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-slate-700">{item.productTitle}</p><p className="mt-0.5 text-[10px] text-slate-400">{item.locationName}</p></div><div className="text-right"><p className={`text-sm font-bold ${item.today <= 0 ? "text-red-600" : "text-amber-700"}`}>{formatQuantity(item.today)}</p><p className="text-[9px] uppercase text-slate-400">units</p></div></div>)}</div>
-      </div>
-    </section>
-    {hasYesterday ? (
-      <section className="grid gap-5 lg:grid-cols-2"><MovementList title="Top inventory reductions" items={reductions} positive={false}/><MovementList title="Top inventory additions" items={additions} positive/></section>
-    ) : isError ? (
-      <section className="rounded-xl border border-dashed border-rose-200 bg-white p-5"><h2 className="text-sm font-semibold text-slate-800">No live inventory data yet</h2><p className="mt-2 max-w-2xl text-sm text-slate-500">Once Shopify is reachable, this area will show live inventory movements and snapshot history.</p></section>
-    ) : (
-      <section className="rounded-xl border border-dashed border-slate-200 bg-white p-5"><h2 className="text-sm font-semibold text-slate-800">Historical movement is warming up</h2><p className="mt-2 max-w-2xl text-sm text-slate-500">Today remains live. {2 - historyCount} more dated snapshot{2 - historyCount === 1 ? " is" : "s are"} needed for the full comparison.</p></section>
-    )}
   </div>;
 }
+
+function value(number: number | null) { return number === null ? "—" : integer.format(number); }
+function Metric({ label, value, helper, tone = "slate" }: { label: string; value: string; helper: string; tone?: "slate" | "green" | "amber" }) { const color = tone === "green" ? "text-emerald-700" : tone === "amber" ? "text-amber-700" : "text-slate-900"; return <div className="rounded-xl border border-slate-200 bg-white p-5"><p className="text-xs font-medium text-slate-500">{label}</p><p className={`mt-2 text-2xl font-semibold ${color}`}>{value}</p><p className="mt-1 text-[11px] text-slate-400">{helper}</p></div>; }
+function UnavailableMetric({ label }: { label: string }) { return <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-5"><p className="text-xs font-medium text-slate-500">{label}</p><p className="mt-2 text-xl font-semibold text-slate-400">Not connected</p><p className="mt-1 text-[11px] text-slate-400">Warehouse source required</p></div>; }
+function MiniMetric({ label, value, danger = false }: { label: string; value: number; danger?: boolean }) { return <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] uppercase tracking-wide text-slate-400">{label}</p><p className={`mt-1 text-xl font-semibold ${danger ? "text-red-600" : "text-slate-800"}`}>{value}</p></div>; }
+
+function Decision({ decision }: { decision: CommandCenterDecision }) { return <article className="p-5"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><HealthBadge health={decision.health}/><span className="text-[11px] text-slate-400">{decision.sku ?? "Missing SKU"}</span></div><h3 className="mt-2 text-sm font-semibold text-slate-900">{decision.productTitle}</h3><p className="mt-1 text-xs text-slate-600">{decision.reason}</p><p className="mt-3 text-xs"><span className="font-semibold text-slate-800">Recommended:</span> <span className="text-slate-600">{decision.recommendation}</span></p></div><div className="grid shrink-0 grid-cols-3 gap-2 text-center"><DecisionNumber label="Online" value={decision.onlineStock}/><DecisionNumber label="Avg/day" value={decision.averageDailyUnits}/><DecisionNumber label="Cover" value={decision.daysCover === null ? "—" : `${decision.daysCover}d`}/></div></div><div className="mt-4 flex gap-2"><Link href={`/inventory/${encodeURIComponent(decision.inventoryItemId)}`} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Review product</Link><button disabled title="Warehouse balances are not connected" className="rounded-lg bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-500">Approve transfer</button></div></article>; }
+function DecisionNumber({ label, value }: { label: string; value: string | number }) { return <div className="min-w-16 rounded-lg bg-slate-50 px-2 py-2"><p className="text-[9px] uppercase text-slate-400">{label}</p><p className="mt-1 text-xs font-bold text-slate-800">{value}</p></div>; }
+const healthStyles: Record<CommandCenterHealth, string> = { healthy: "bg-emerald-50 text-emerald-700", monitor: "bg-blue-50 text-blue-700", low: "bg-amber-50 text-amber-700", critical: "bg-orange-50 text-orange-700", urgent: "bg-red-50 text-red-700", "out-of-stock": "bg-slate-800 text-white" };
+function HealthBadge({ health }: { health: CommandCenterHealth }) { return <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${healthStyles[health]}`}>{health.replaceAll("-", " ")}</span>; }

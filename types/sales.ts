@@ -31,6 +31,6 @@ export interface SalesReport {
   netRevenue: number;
   averageOrderValue: number;
   projected30DayRevenue: number;
-  daily: { date: string; orders: number; revenue: number; refunds: number }[];
+  daily: { date: string; orders: number; units: number; revenue: number; refunds: number }[];
   products: { productId: string | null; title: string; units: number; revenue: number }[];
 }
