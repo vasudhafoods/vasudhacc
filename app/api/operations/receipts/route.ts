@@ -1,0 +1,42 @@
+import { getDashboardSession } from "@/lib/auth/authorization";
+import { InventoryCommandError, receiveAndAllocateStock } from "@/services/inventory-ledger";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function optionalDate(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "Manufacturing and expiry dates must be valid dates.");
+  return date;
+}
+
+export async function POST(request: Request) {
+  const session = await getDashboardSession();
+  if (!session) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
+  try {
+    const body = await request.json() as Record<string, unknown>;
+    const result = await receiveAndAllocateStock({
+      productId: String(body.productId ?? ""),
+      warehouseLocationId: String(body.warehouseLocationId ?? ""),
+      receivedQuantity: Number(body.receivedQuantity),
+      damagedQuantity: Number(body.damagedQuantity ?? 0),
+      onlineQuantity: Number(body.onlineQuantity ?? 0),
+      retailQuantity: Number(body.retailQuantity ?? 0),
+      bufferQuantity: Number(body.bufferQuantity ?? 0),
+      batchNumber: String(body.batchNumber ?? ""),
+      manufacturingDate: optionalDate(body.manufacturingDate),
+      expiryDate: optionalDate(body.expiryDate),
+      actorUsername: session.username,
+      reason: String(body.reason ?? "").trim(),
+      source: String(body.source ?? "").trim(),
+      idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "",
+      shopifyMappingId: body.shopifyMappingId ? String(body.shopifyMappingId) : undefined,
+      referenceId: body.referenceId ? String(body.referenceId) : undefined,
+    });
+    return Response.json({ ok: true, result }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    if (error instanceof InventoryCommandError) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.code === "NOT_FOUND" ? 404 : 400 });
+    return Response.json({ error: { code: "RECEIPT_FAILED", message: error instanceof Error ? error.message : "Stock receipt failed." } }, { status: 500 });
+  }
+}
