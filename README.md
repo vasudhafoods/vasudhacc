@@ -55,7 +55,9 @@ Management pages require the configured internal-admin username and password. Ad
 
 Warehouse staff are restricted to the Warehouse desk. They can receive and allocate new stock, create product records, review each entry before submission, and see only the updates submitted under their username. The restriction is enforced in the page routing and again at every mutation API. Disabling an account blocks its active session on the next server request.
 
-Stock receipts are written through the transactional inventory ledger, including immutable transaction lines and an audit event. Product creation is also audited. A product created by warehouse staff is available for Retail and Buffer allocation immediately; Online allocation remains unavailable until management links the product to Shopify.
+Stock receipts are written through the transactional inventory ledger, including immutable transaction lines and an audit event. Product creation is also audited. A product created by warehouse staff must be linked through Shopify catalogue synchronization before its first automatically allocated receipt.
+
+Warehouse receipts use individual packets as the physical base unit. After damaged units are removed, the screen automatically allocates 40% Online, 40% Retail, and the integer remainder to Buffer. Synced Pack-of-3/Pack-of-5/Pack-of-10 Shopify variants are excluded from physical receiving so the same packet pool is not counted multiple times.
 
 Use a unique password of at least 12 characters and a cryptographically random `SESSION_SECRET` of at least 32 characters. Replace the admin password in Vercel when needed; rotate `SESSION_SECRET` and redeploy when every existing session must be invalidated.
 

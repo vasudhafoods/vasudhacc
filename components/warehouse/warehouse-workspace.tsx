@@ -16,8 +16,6 @@ interface ReceiptDraft {
   manufacturingDate: string;
   expiryDate: string;
   receivedQuantity: string;
-  onlineQuantity: string;
-  retailQuantity: string;
   damagedQuantity: string;
 }
 
@@ -92,8 +90,6 @@ export function WarehouseWorkspace({ user, initialData }: {
     manufacturingDate: "",
     expiryDate: "",
     receivedQuantity: "",
-    onlineQuantity: "0",
-    retailQuantity: "0",
     damagedQuantity: "0",
   });
   const [product, setProduct] = useState<ProductDraft>(EMPTY_PRODUCT);
@@ -101,10 +97,11 @@ export function WarehouseWorkspace({ user, initialData }: {
   const selectedProduct = initialData.products.find((item) => item.id === receipt.productId) ?? null;
   const selectedLocation = initialData.locations.find((item) => item.id === receipt.warehouseLocationId) ?? null;
   const receivedQuantity = quantity(receipt.receivedQuantity);
-  const onlineQuantity = quantity(receipt.onlineQuantity);
-  const retailQuantity = quantity(receipt.retailQuantity);
   const damagedQuantity = quantity(receipt.damagedQuantity);
-  const bufferQuantity = receivedQuantity - onlineQuantity - retailQuantity - damagedQuantity;
+  const usableQuantity = receivedQuantity - damagedQuantity;
+  const onlineQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
+  const retailQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
+  const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity - retailQuantity : 0;
   const wholeQuantities = [receivedQuantity, onlineQuantity, retailQuantity, damagedQuantity, bufferQuantity].every(Number.isSafeInteger);
 
   const activityCounts = useMemo(() => ({
@@ -127,9 +124,9 @@ export function WarehouseWorkspace({ user, initialData }: {
     if (!selectedProduct) return setReceiptError("Select a product.");
     if (!selectedLocation) return setReceiptError("Select a warehouse location.");
     if (!receipt.batchNumber.trim()) return setReceiptError("Enter the batch number printed on the stock.");
-    if (!wholeQuantities || receivedQuantity <= 0 || onlineQuantity < 0 || retailQuantity < 0 || damagedQuantity < 0) return setReceiptError("All quantities must be positive whole numbers, and total received must be greater than zero.");
-    if (bufferQuantity < 0) return setReceiptError("Online, retail, and damaged stock are more than the total received. Reduce one of those values.");
-    if (onlineQuantity > 0 && !selectedProduct.shopifyMappingId) return setReceiptError("This product is not linked to Shopify yet. Keep Online stock at 0 and allocate it to Retail or Buffer.");
+    if (!wholeQuantities || receivedQuantity <= 0 || damagedQuantity < 0) return setReceiptError("Total received and damaged stock must be non-negative whole numbers, and total received must be greater than zero.");
+    if (damagedQuantity > receivedQuantity) return setReceiptError("Damaged stock cannot be greater than the total received.");
+    if (onlineQuantity > 0 && !selectedProduct.shopifyMappingId) return setReceiptError("This product must be linked to Shopify before the automatic Online allocation can be submitted. Ask an administrator to synchronize the catalogue.");
     if (receipt.manufacturingDate && receipt.expiryDate && receipt.expiryDate < receipt.manufacturingDate) return setReceiptError("Expiry date cannot be before the manufacturing date.");
     setReceiptError(null);
     setIdempotencyKey(crypto.randomUUID());
@@ -174,8 +171,6 @@ export function WarehouseWorkspace({ user, initialData }: {
       manufacturingDate: "",
       expiryDate: "",
       receivedQuantity: "",
-      onlineQuantity: "0",
-      retailQuantity: "0",
       damagedQuantity: "0",
     }));
     setReceiptSuccess(null);
@@ -246,20 +241,20 @@ export function WarehouseWorkspace({ user, initialData }: {
           <ErrorMessage message={receiptError}/>
           {!initialData.products.length || !initialData.locations.length ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">{!initialData.products.length ? "No active products are available. Add a product first. " : ""}{!initialData.locations.length ? "No warehouse location is configured. Ask an administrator to configure one." : ""}</div> : null}
           <div className="grid gap-5 md:grid-cols-2">
-            <Field label="Product"><select className={inputClass} value={receipt.productId} onChange={(event) => { updateReceipt("productId", event.target.value); updateReceipt("onlineQuantity", "0"); }} required><option value="">Choose product</option>{initialData.products.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.sku}</option>)}</select></Field>
+            <Field label="Product"><select className={inputClass} value={receipt.productId} onChange={(event) => updateReceipt("productId", event.target.value)} required><option value="">Choose product</option>{initialData.products.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.sku}</option>)}</select></Field>
             <Field label="Warehouse location"><select className={inputClass} value={receipt.warehouseLocationId} onChange={(event) => updateReceipt("warehouseLocationId", event.target.value)} required><option value="">Choose location</option>{initialData.locations.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></Field>
             <Field label="Batch number" hint="Enter exactly as printed on the carton or pouch."><input className={inputClass} value={receipt.batchNumber} onChange={(event) => updateReceipt("batchNumber", event.target.value)} placeholder="Example: MIL-260908-A" required/></Field>
             <Field label="Total units received"><input className={inputClass} type="number" inputMode="numeric" min="1" step="1" value={receipt.receivedQuantity} onChange={(event) => updateReceipt("receivedQuantity", event.target.value)} placeholder="0" required/></Field>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-            <h3 className="font-bold text-slate-900">Where should this stock go?</h3>
-            <p className="mt-1 text-sm text-slate-500">Enter Online, Retail, and Damaged. The remaining units automatically go to Buffer.</p>
+            <h3 className="font-bold text-slate-900">Automatic stock allocation</h3>
+            <p className="mt-1 text-sm text-slate-500">Enter damaged or rejected packets only. Usable stock is divided automatically: 40% Online, 40% Retail, and the remaining packets to Buffer.</p>
             <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Field label="Online" hint={selectedProduct?.shopifyMappingId ? "Will be queued for Shopify sync." : "Not linked to Shopify; keep at 0."}><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.onlineQuantity} disabled={!selectedProduct?.shopifyMappingId} onChange={(event) => updateReceipt("onlineQuantity", event.target.value)}/></Field>
-              <Field label="Retail"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.retailQuantity} onChange={(event) => updateReceipt("retailQuantity", event.target.value)}/></Field>
               <Field label="Damaged / rejected"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.damagedQuantity} onChange={(event) => updateReceipt("damagedQuantity", event.target.value)}/></Field>
-              <div className={`rounded-xl border p-3.5 ${bufferQuantity < 0 ? "border-rose-300 bg-rose-50" : "border-emerald-200 bg-white"}`}><p className="text-sm font-semibold text-slate-700">Buffer (automatic)</p><p className={`mt-2 text-3xl font-bold ${bufferQuantity < 0 ? "text-rose-700" : "text-emerald-800"}`}>{Number.isFinite(bufferQuantity) ? bufferQuantity : 0}</p><p className="mt-1 text-xs text-slate-500">Remaining protected stock</p></div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Online · 40%</p><p className="mt-2 text-3xl font-bold text-emerald-800">{onlineQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-blue-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Retail · 40%</p><p className="mt-2 text-3xl font-bold text-blue-800">{retailQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-amber-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Buffer · remainder</p><p className="mt-2 text-3xl font-bold text-amber-800">{bufferQuantity}</p><p className="mt-1 text-xs text-slate-500">Protected packets</p></div>
             </div>
           </div>
 
@@ -296,7 +291,7 @@ export function WarehouseWorkspace({ user, initialData }: {
     {panel === "product" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{productStep === "edit" ? "Step 1 of 2 · Enter" : productStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{productStep === "success" ? "Product created successfully" : "Add a new product"}</h2><p className="mt-1 text-sm text-slate-500">Use this only when the SKU is not already in the product list.</p></div>
       <div className="p-5 sm:p-7">
-        {productStep === "edit" ? <form className="mx-auto max-w-2xl space-y-5" onSubmit={reviewProduct}><ErrorMessage message={productError}/><Field label="Product name" hint="Use the name printed on the product."><input className={inputClass} value={product.name} onChange={(event) => updateProduct("name", event.target.value)} placeholder="Example: Millet Noodles Classic" required/></Field><div className="grid gap-5 sm:grid-cols-2"><Field label="SKU" hint="Must be unique."><input className={`${inputClass} uppercase`} value={product.sku} onChange={(event) => updateProduct("sku", event.target.value)} placeholder="Example: MN-CLASSIC-180" required/></Field><Field label="Pack size"><input className={inputClass} value={product.packSize} onChange={(event) => updateProduct("packSize", event.target.value)} placeholder="Example: 180 g"/></Field></div><Field label="Barcode" hint="Optional. Scan or type the number if available."><input className={inputClass} value={product.barcode} onChange={(event) => updateProduct("barcode", event.target.value)} placeholder="Optional barcode"/></Field><div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">Creating a product adds it to Neon. An administrator can connect it to the matching Shopify variant later; until then, warehouse staff can allocate its stock to Retail or Buffer.</div><div className="flex justify-end"><button type="submit" className="h-12 rounded-xl bg-[#174f40] px-7 font-bold text-white">Review new product →</button></div></form> : null}
+        {productStep === "edit" ? <form className="mx-auto max-w-2xl space-y-5" onSubmit={reviewProduct}><ErrorMessage message={productError}/><Field label="Product name" hint="Use the name printed on the product."><input className={inputClass} value={product.name} onChange={(event) => updateProduct("name", event.target.value)} placeholder="Example: Millet Noodles Classic" required/></Field><div className="grid gap-5 sm:grid-cols-2"><Field label="SKU" hint="Must be unique."><input className={`${inputClass} uppercase`} value={product.sku} onChange={(event) => updateProduct("sku", event.target.value)} placeholder="Example: MN-CLASSIC-180" required/></Field><Field label="Pack size"><input className={inputClass} value={product.packSize} onChange={(event) => updateProduct("packSize", event.target.value)} placeholder="Example: 180 g"/></Field></div><Field label="Barcode" hint="Optional. Scan or type the number if available."><input className={inputClass} value={product.barcode} onChange={(event) => updateProduct("barcode", event.target.value)} placeholder="Optional barcode"/></Field><div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">Creating a product adds it to Neon. Before receiving its stock, an administrator must connect it to Shopify so the automatic Online allocation has a verified destination.</div><div className="flex justify-end"><button type="submit" className="h-12 rounded-xl bg-[#174f40] px-7 font-bold text-white">Review new product →</button></div></form> : null}
         {productStep === "review" ? <div className="mx-auto max-w-2xl space-y-5"><ErrorMessage message={productError}/><div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><strong>Check for duplicates</strong> before submitting, especially the product SKU.</div><dl className="rounded-2xl border border-slate-200 px-5"><SummaryRow label="Product name" value={product.name}/><SummaryRow label="SKU" value={product.sku.trim().toUpperCase()} strong/><SummaryRow label="Pack size" value={product.packSize || "Not entered"}/><SummaryRow label="Barcode" value={product.barcode || "Not entered"}/><SummaryRow label="Submitted by" value={user.username}/></dl><div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setProductStep("edit")} disabled={submitting} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">← Go back and edit</button><button type="button" onClick={submitProduct} disabled={submitting} className="h-12 rounded-xl bg-[#174f40] font-bold text-white disabled:opacity-60">{submitting ? "Creating…" : "Create product in database"}</button></div></div> : null}
         {productStep === "success" && createdProduct ? <div className="mx-auto max-w-2xl text-center"><div className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-3xl font-bold text-emerald-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">Product added</h3><p className="mt-2 text-sm text-slate-500">It is now available in the warehouse product list.</p><dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={createdProduct.name}/><SummaryRow label="SKU" value={createdProduct.sku} strong/><SummaryRow label="Pack size" value={createdProduct.packSize || "Not entered"}/><SummaryRow label="Shopify connection" value="Not linked yet"/><SummaryRow label="Created by" value={user.username}/></dl><div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={() => { setProduct(EMPTY_PRODUCT); setCreatedProduct(null); setProductStep("edit"); }} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Add another product</button></div></div> : null}
       </div>

@@ -38,8 +38,8 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
   const [productRows, mappingRows, locationRows, transactionRows, productAuditRows] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize })
       .from(products).where(eq(products.active, true)).orderBy(products.name, products.sku),
-    db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId })
-      .from(shopifyMappings).where(eq(shopifyMappings.status, "mapped")),
+    db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId, status: shopifyMappings.status })
+      .from(shopifyMappings),
     db.select({ id: warehouseLocations.id, code: warehouseLocations.code, name: warehouseLocations.name })
       .from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
     db.select({
@@ -56,11 +56,14 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
   ]);
 
   const mappingByProduct = new Map<string, string>();
-  for (const mapping of mappingRows) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping.id);
-  const productOptions: WarehouseProductOption[] = productRows.map((product) => ({
-    ...product,
-    shopifyMappingId: mappingByProduct.get(product.id) ?? null,
-  }));
+  const shopifyProducts = new Set(mappingRows.map((mapping) => mapping.productId));
+  for (const mapping of mappingRows) if (mapping.status === "mapped" && !mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping.id);
+  const productOptions: WarehouseProductOption[] = productRows.flatMap((product) => {
+    const shopifyMappingId = mappingByProduct.get(product.id) ?? null;
+    const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
+    if (shopifyProducts.has(product.id) && packMatch && Number(packMatch[1]) !== 1) return [];
+    return [{ ...product, shopifyMappingId }];
+  });
 
   const receiptActivities: WarehouseActivity[] = [];
   if (transactionRows.length) {
