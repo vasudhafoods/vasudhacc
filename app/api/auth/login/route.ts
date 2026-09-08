@@ -1,19 +1,22 @@
 import { NextResponse } from "next/server";
 import { createDashboardSession, DASHBOARD_SESSION_COOKIE, DASHBOARD_SESSION_MAX_AGE_SECONDS } from "@/lib/auth/session";
 import { authenticateDashboardCredentials, isDashboardAuthConfigured } from "@/lib/auth/authorization";
-import { isWarehouseRole } from "@/types/auth";
+import { isManagementRole, isWarehouseRole } from "@/types/auth";
 
 export async function POST(request: Request) {
   const formData = await request.formData();
   const username = String(formData.get("username") ?? "").trim().slice(0, 200);
   const password = String(formData.get("password") ?? "").slice(0, 500);
+  const portal = formData.get("portal") === "warehouse" ? "warehouse" : "admin";
+  const loginUrl = (error: string) => new URL(`/login?error=${error}&portal=${portal}`, request.url);
 
   if (!isDashboardAuthConfigured()) {
-    return NextResponse.redirect(new URL("/login?error=configuration", request.url), 303);
+    return NextResponse.redirect(loginUrl("configuration"), 303);
   }
   const user = await authenticateDashboardCredentials(username, password);
-  if (!user) {
-    return NextResponse.redirect(new URL("/login?error=credentials", request.url), 303);
+  const portalMatchesRole = user && (portal === "warehouse" ? isWarehouseRole(user.role) : isManagementRole(user.role));
+  if (!user || !portalMatchesRole) {
+    return NextResponse.redirect(loginUrl("credentials"), 303);
   }
 
   const response = NextResponse.redirect(new URL(isWarehouseRole(user.role) ? "/warehouse" : "/", request.url), 303);
