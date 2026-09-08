@@ -12,6 +12,8 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { AlertDeliveryResult, OperationsSettings as OperationsSettingsDocument } from "@/types/operations";
+import type { CurrentInventoryResult } from "@/types/shopify";
 
 const auditColumns = {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -210,6 +212,43 @@ export const auditEvents = pgTable("audit_events", {
   reason: text("reason").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [index("audit_events_entity_idx").on(table.entityType, table.entityId, table.createdAt)]);
+
+export const inventorySnapshots = pgTable("inventory_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  snapshotDate: text("snapshot_date").notNull(),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  inventory: jsonb("inventory").$type<CurrentInventoryResult>().notNull(),
+  totalInventory: integer("total_inventory").notNull(),
+  totalProducts: integer("total_products").notNull(),
+  ...auditColumns,
+}, (table) => [
+  uniqueIndex("inventory_snapshots_date_unique").on(table.snapshotDate),
+  index("inventory_snapshots_captured_idx").on(table.capturedAt),
+]);
+
+export const operationsSettings = pgTable("operations_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<OperationsSettingsDocument>().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const inventorySnapshotRuns = pgTable("inventory_snapshot_runs", {
+  id: uuid("id").primaryKey(),
+  source: text("source").notNull(),
+  status: text("status").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+  snapshotDate: text("snapshot_date"),
+  totalInventory: integer("total_inventory"),
+  totalProducts: integer("total_products"),
+  message: text("message").notNull(),
+  alertResults: jsonb("alert_results").$type<AlertDeliveryResult[]>(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("inventory_snapshot_runs_started_idx").on(table.startedAt),
+  check("inventory_snapshot_runs_source_valid", sql`${table.source} in ('cron', 'manual')`),
+  check("inventory_snapshot_runs_status_valid", sql`${table.status} in ('success', 'failure')`),
+]);
 
 export type InventoryBucket = (typeof inventoryBucket.enumValues)[number];
 export type InventoryTransactionType = (typeof inventoryTransactionType.enumValues)[number];

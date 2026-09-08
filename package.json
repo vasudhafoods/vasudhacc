@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@next/env": "^16.2.12",
-    "@vercel/blob": "^2.6.1",
     "drizzle-orm": "^0.45.2",
     "next": "16.2.12",
     "postgres": "^3.4.9",

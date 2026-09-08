@@ -1,5 +1,7 @@
 import "server-only";
-import { get, list, put } from "@vercel/blob";
+import { desc, inArray } from "drizzle-orm";
+import { getDatabase } from "@/db/client";
+import { inventorySnapshots } from "@/db/schema";
 import { compareInventory } from "@/lib/comparison/inventory";
 import type { CurrentInventoryItem, CurrentInventoryResult } from "@/types/shopify";
 import type {
@@ -8,16 +10,9 @@ import type {
   InventorySnapshotDocument,
 } from "@/types/inventory-snapshot";
 
-const SNAPSHOT_PREFIX = "inventory-snapshots";
-const SNAPSHOT_ACCESS = "private";
-const SNAPSHOT_CACHE_SECONDS = 300;
 const KOLKATA_TIME_ZONE = "Asia/Kolkata";
 const MAX_HISTORY_SNAPSHOTS = 3;
-
-interface BlobSnapshotEntry {
-  pathname: string;
-  uploadedAt: Date;
-}
+const SNAPSHOT_PREFIX = "inventory-snapshots";
 
 export function toKolkataDateKey(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -46,45 +41,42 @@ function buildSnapshotDocument(inventory: CurrentInventoryResult, snapshotDate: 
   };
 }
 
-async function listSnapshotEntries(): Promise<BlobSnapshotEntry[]> {
-  const blobs: BlobSnapshotEntry[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({ prefix: `${SNAPSHOT_PREFIX}/`, cursor, limit: 1000 });
-    blobs.push(...page.blobs.map((blob) => ({ pathname: blob.pathname, uploadedAt: blob.uploadedAt })));
-    cursor = page.hasMore ? page.cursor : undefined;
-  } while (cursor);
-  return blobs.filter((blob) => blob.pathname.endsWith(".json")).sort((left, right) => left.pathname.localeCompare(right.pathname));
-}
-
-async function readSnapshot(pathname: string): Promise<InventorySnapshotDocument | null> {
-  const response = await get(pathname, { access: SNAPSHOT_ACCESS, useCache: false });
-  if (!response || response.statusCode !== 200) return null;
-  const document = (await new Response(response.stream).json()) as Partial<InventorySnapshotDocument>;
-  if (!document || document.schemaVersion !== 1 || typeof document.snapshotDate !== "string" || typeof document.capturedAt !== "string" || !document.inventory) return null;
-  return document as InventorySnapshotDocument;
-}
-
 export async function readRecentInventorySnapshots(limit = 30): Promise<InventorySnapshotDocument[]> {
-  const entries = (await listSnapshotEntries()).slice(-Math.max(1, limit));
-  return (await Promise.all(entries.map((entry) => readSnapshot(entry.pathname))))
-    .filter((snapshot): snapshot is InventorySnapshotDocument => snapshot !== null)
-    .sort((a, b) => a.snapshotDate.localeCompare(b.snapshotDate));
+  try {
+    const rows = await getDatabase().select({
+      snapshotDate: inventorySnapshots.snapshotDate,
+      capturedAt: inventorySnapshots.capturedAt,
+      inventory: inventorySnapshots.inventory,
+    }).from(inventorySnapshots).orderBy(desc(inventorySnapshots.snapshotDate)).limit(Math.min(365, Math.max(1, limit)));
+    return rows.reverse().map((row) => ({
+      schemaVersion: 1,
+      snapshotDate: row.snapshotDate,
+      capturedAt: row.capturedAt.toISOString(),
+      inventory: row.inventory,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export async function readInventorySnapshotsByDate(snapshotDates: string[]): Promise<Map<string, InventorySnapshotDocument>> {
-  const requestedDates = new Set(snapshotDates);
-  if (requestedDates.size === 0) return new Map();
-
-  const entries = await listSnapshotEntries();
-  const matchingEntries = entries.filter((entry) => {
-    const snapshotDate = entry.pathname.slice(`${SNAPSHOT_PREFIX}/`.length, -".json".length);
-    return requestedDates.has(snapshotDate);
-  });
-  const snapshots = (await Promise.all(matchingEntries.map((entry) => readSnapshot(entry.pathname))))
-    .filter((snapshot): snapshot is InventorySnapshotDocument => snapshot !== null);
-
-  return new Map(snapshots.map((snapshot) => [snapshot.snapshotDate, snapshot]));
+  const requestedDates = [...new Set(snapshotDates)];
+  if (requestedDates.length === 0) return new Map();
+  try {
+    const rows = await getDatabase().select({
+      snapshotDate: inventorySnapshots.snapshotDate,
+      capturedAt: inventorySnapshots.capturedAt,
+      inventory: inventorySnapshots.inventory,
+    }).from(inventorySnapshots).where(inArray(inventorySnapshots.snapshotDate, requestedDates));
+    return new Map(rows.map((row) => [row.snapshotDate, {
+      schemaVersion: 1 as const,
+      snapshotDate: row.snapshotDate,
+      capturedAt: row.capturedAt.toISOString(),
+      inventory: row.inventory,
+    }]));
+  } catch {
+    return new Map();
+  }
 }
 
 function snapshotLabel(index: number, total: number): string {
@@ -134,27 +126,33 @@ function alignSnapshotsForComparison(snapshots: InventorySnapshotDocument[]) {
 
 export async function writeCurrentInventorySnapshot(inventory: CurrentInventoryResult): Promise<InventorySnapshotDescriptor> {
   const snapshotDate = toKolkataDateKey(new Date());
-  const pathname = buildSnapshotPath(snapshotDate);
   const document = buildSnapshotDocument(inventory, snapshotDate);
-
-  const blob = await put(pathname, JSON.stringify(document, null, 2), {
-    access: SNAPSHOT_ACCESS,
-    allowOverwrite: true,
-    contentType: "application/json",
-    cacheControlMaxAge: SNAPSHOT_CACHE_SECONDS,
+  await getDatabase().insert(inventorySnapshots).values({
+    snapshotDate,
+    capturedAt: new Date(document.capturedAt),
+    inventory: document.inventory,
+    totalInventory: document.inventory.summary.totalInventory,
+    totalProducts: document.inventory.summary.totalProducts,
+  }).onConflictDoUpdate({
+    target: inventorySnapshots.snapshotDate,
+    set: {
+      capturedAt: new Date(document.capturedAt),
+      inventory: document.inventory,
+      totalInventory: document.inventory.summary.totalInventory,
+      totalProducts: document.inventory.summary.totalProducts,
+      updatedAt: new Date(),
+    },
   });
 
   return {
-    pathname: blob.pathname,
+    pathname: buildSnapshotPath(snapshotDate),
     uploadedAt: document.capturedAt,
     snapshotDate,
   };
 }
 
 export async function readLatestInventoryHistory(): Promise<InventoryHistoryResult> {
-  const entries = await listSnapshotEntries();
-  const latestEntries = entries.slice(-MAX_HISTORY_SNAPSHOTS);
-  const snapshots = (await Promise.all(latestEntries.map((entry) => readSnapshot(entry.pathname)))).filter((snapshot): snapshot is InventorySnapshotDocument => snapshot !== null);
+  const snapshots = await readRecentInventorySnapshots(MAX_HISTORY_SNAPSHOTS);
 
   if (snapshots.length === 0) {
     return {

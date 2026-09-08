@@ -8,6 +8,13 @@
       "when": 1788783390050,
       "tag": "0000_heavy_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788853419672,
+      "tag": "0001_damp_synch",
+      "breakpoints": true
     }
   ]
 }
