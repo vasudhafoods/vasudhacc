@@ -75,7 +75,9 @@ Use a unique password of at least 12 characters and a cryptographically random `
 
 ## Daily snapshots
 
-Vercel Cron calls `GET /api/cron/inventory` at `01:30 UTC`, or `07:00 IST`, every day. The route fetches current Shopify inventory, writes the dated snapshot to Neon, and sends the configured Resend summary email to `ALERT_EMAIL_TO`.
+Vercel Cron calls `GET /api/cron/inventory` at `02:30 UTC`, or `08:00 IST`, every day. The route fetches current Shopify inventory, writes the dated snapshot to Neon, and sends the configured Resend summary email to every comma-separated address in `ALERT_EMAIL_TO`.
+
+Vercel Hobby runs daily cron jobs with hourly rather than minute-level precision, so the free plan delivers this around 8:00 AM IST. Exact-minute scheduling requires Vercel Pro or an external scheduler.
 
 Running the cron more than once on the same day safely replaces that day's snapshot. When `CRON_SECRET` is configured in Vercel, scheduled requests include it as a bearer token.
 
