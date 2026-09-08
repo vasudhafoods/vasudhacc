@@ -2,6 +2,7 @@ import { getInventoryFeed } from "@/lib/inventory/live-data";
 import { buildInventoryCsv, buildInventoryExcel, buildInventoryJson } from "@/lib/inventory/export";
 import { filterInventoryItems } from "@/lib/inventory/filter";
 import { getDashboardSession } from "@/lib/auth/authorization";
+import { isManagementRole } from "@/types/auth";
 import type { InventoryStatus } from "@/types/inventory";
 
 export const runtime = "nodejs";
@@ -17,9 +18,11 @@ function parseStatus(value: string | null): "all" | InventoryStatus {
 }
 
 export async function GET(request: Request) {
-  if (!await getDashboardSession()) {
+  const session = await getDashboardSession();
+  if (!session) {
     return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
   }
+  if (!isManagementRole(session.role)) return Response.json({ error: { code: "FORBIDDEN", message: "Management access is required." } }, { status: 403 });
   const feed = await getInventoryFeed();
   const url = new URL(request.url);
   const items = filterInventoryItems(feed.items, {

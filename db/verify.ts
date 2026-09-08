@@ -30,7 +30,14 @@ async function main() {
     const [migrationCount] = await client<{ count: number }[]>`
       select count(*)::int as count from drizzle.__drizzle_migrations
     `;
-    console.log(JSON.stringify({ expectedTables: tableCount.count, migrations: migrationCount.count, locations }, null, 2));
+    const staffColumns = await client<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'staff_users'
+        and column_name = any(array['password_hash', 'last_login_at'])
+      order by column_name
+    `;
+    console.log(JSON.stringify({ expectedTables: tableCount.count, migrations: migrationCount.count, locations, staffLoginColumns: staffColumns.map((column) => column.column_name) }, null, 2));
   } finally {
     await client.end();
   }

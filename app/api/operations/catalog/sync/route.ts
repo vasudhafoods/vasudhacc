@@ -1,11 +1,14 @@
 import { getDashboardSession } from "@/lib/auth/authorization";
 import { syncShopifyCatalog } from "@/services/catalog-sync";
+import { isManagementRole } from "@/types/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST() {
-  if (!await getDashboardSession()) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
+  const session = await getDashboardSession();
+  if (!session) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
+  if (!isManagementRole(session.role)) return Response.json({ error: { code: "FORBIDDEN", message: "Management access is required." } }, { status: 403 });
   try {
     return Response.json({ ok: true, result: await syncShopifyCatalog() }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {

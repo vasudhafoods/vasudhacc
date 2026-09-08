@@ -1,6 +1,7 @@
 import { getDashboardSession } from "@/lib/auth/authorization";
 import { inventoryBucket, type InventoryBucket } from "@/db/schema";
 import { InventoryCommandError, transferInventory } from "@/services/inventory-ledger";
+import { isManagementRole } from "@/types/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ function isBucket(value: unknown): value is InventoryBucket {
 export async function POST(request: Request) {
   const session = await getDashboardSession();
   if (!session) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
+  if (!isManagementRole(session.role)) return Response.json({ error: { code: "FORBIDDEN", message: "Management access is required." } }, { status: 403 });
   try {
     const body = await request.json() as Record<string, unknown>;
     const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? "";

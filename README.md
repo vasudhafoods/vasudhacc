@@ -49,11 +49,15 @@ read_products,read_inventory,read_locations,read_orders
 
 After changing scopes, release a new app version and approve the updated installation on the store. The app must remain installed for client-credentials authentication to work.
 
-## Dashboard authentication
+## Team authentication
 
-All dashboard and inventory pages require the configured internal-admin username and password. Successful login creates a signed, HTTP-only, SameSite session cookie that expires after 12 hours. The inventory export route verifies the session independently, and the UI provides a Sign out action.
+Management pages require the configured internal-admin username and password. Administrators can create database-backed warehouse accounts under **Settings → Warehouse staff accounts**. Successful login creates a signed, HTTP-only, SameSite session cookie that expires after 12 hours, and the UI provides a Sign out action.
 
-Use a unique password of at least 12 characters and a cryptographically random `SESSION_SECRET` of at least 32 characters. Change either value in Vercel and redeploy to invalidate or replace access.
+Warehouse staff are restricted to the Warehouse desk. They can receive and allocate new stock, create product records, review each entry before submission, and see only the updates submitted under their username. The restriction is enforced in the page routing and again at every mutation API. Disabling an account blocks its active session on the next server request.
+
+Stock receipts are written through the transactional inventory ledger, including immutable transaction lines and an audit event. Product creation is also audited. A product created by warehouse staff is available for Retail and Buffer allocation immediately; Online allocation remains unavailable until management links the product to Shopify.
+
+Use a unique password of at least 12 characters and a cryptographically random `SESSION_SECRET` of at least 32 characters. Replace the admin password in Vercel when needed; rotate `SESSION_SECRET` and redeploy when every existing session must be invalidated.
 
 ## Inventory behavior
 
@@ -99,6 +103,8 @@ Each requires `Authorization: Bearer <CRON_SECRET>`.
 - Shopify access tokens are short-lived, cached only in server memory, and refreshed automatically.
 - Dashboard sessions are signed and stored in Secure/HTTP-only cookies in production.
 - Page requests receive an optimistic authentication check, while pages and exports also verify the session close to the data access.
+- Warehouse passwords are hashed with scrypt and never stored or returned as plain text.
+- Role checks prevent warehouse accounts from accessing management pages, settings, exports, planning, or management mutation APIs.
 - Inventory snapshots, settings, and warehouse records remain in the server-only Neon database.
 - Internal inventory and cron endpoints require constant-time bearer-token verification.
 
@@ -118,4 +124,5 @@ npm run build
 4. Verify the domain used by `ALERT_EMAIL_FROM` in Resend and enable **Daily email summary** under Settings (existing installations only).
 5. Confirm an unauthenticated request redirects to `/login`.
 6. Sign in and verify current inventory against Shopify.
-7. Confirm the next scheduled cron execution returns `200`, creates the dated snapshot, and records the email result in the snapshot run.
+7. Under Settings, create a warehouse test account and confirm it opens only the Warehouse desk.
+8. Confirm the next scheduled cron execution returns `200`, creates the dated snapshot, and records the email result in the snapshot run.

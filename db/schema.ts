@@ -45,7 +45,9 @@ export const staffUsers = pgTable("staff_users", {
   username: text("username").notNull(),
   displayName: text("display_name").notNull(),
   role: staffRole("role").notNull(),
+  passwordHash: text("password_hash"),
   active: boolean("active").default(true).notNull(),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   ...auditColumns,
 }, (table) => [uniqueIndex("staff_users_username_unique").on(table.username)]);
 
@@ -252,3 +254,4 @@ export const inventorySnapshotRuns = pgTable("inventory_snapshot_runs", {
 
 export type InventoryBucket = (typeof inventoryBucket.enumValues)[number];
 export type InventoryTransactionType = (typeof inventoryTransactionType.enumValues)[number];
+export type StaffRole = (typeof staffRole.enumValues)[number];

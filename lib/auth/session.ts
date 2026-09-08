@@ -1,10 +1,12 @@
+import type { AuthenticatedUser } from "@/types/auth";
+import { isDashboardRole } from "@/types/auth";
+
 const encoder = new TextEncoder();
 
 export const DASHBOARD_SESSION_COOKIE = "vasudha_dashboard_session";
 export const DASHBOARD_SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 
-export interface DashboardSession {
-  username: string;
+export interface DashboardSession extends AuthenticatedUser {
   expiresAt: number;
 }
 
@@ -42,11 +44,11 @@ export function isSessionConfigurationValid(): boolean {
   return sessionSecret() !== null;
 }
 
-export async function createDashboardSession(username: string): Promise<string> {
+export async function createDashboardSession(user: AuthenticatedUser): Promise<string> {
   const secret = sessionSecret();
   if (!secret) throw new Error("SESSION_SECRET must contain at least 32 characters.");
   const session: DashboardSession = {
-    username,
+    ...user,
     expiresAt: Math.floor(Date.now() / 1000) + DASHBOARD_SESSION_MAX_AGE_SECONDS,
   };
   const payload = base64UrlEncode(JSON.stringify(session));
@@ -63,9 +65,21 @@ export async function readDashboardSession(token: string | undefined): Promise<D
     const expectedSignature = await signature(payload, secret);
     if (!constantTimeEqual(base64UrlDecode(suppliedSignature), expectedSignature)) return null;
     const session = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))) as Partial<DashboardSession>;
-    if (typeof session.username !== "string" || typeof session.expiresAt !== "number") return null;
+    if (
+      (session.userId !== null && typeof session.userId !== "string")
+      || typeof session.username !== "string"
+      || typeof session.displayName !== "string"
+      || !isDashboardRole(session.role)
+      || typeof session.expiresAt !== "number"
+    ) return null;
     if (session.expiresAt <= Math.floor(Date.now() / 1000)) return null;
-    return { username: session.username, expiresAt: session.expiresAt };
+    return {
+      userId: session.userId ?? null,
+      username: session.username,
+      displayName: session.displayName,
+      role: session.role,
+      expiresAt: session.expiresAt,
+    };
   } catch {
     return null;
   }

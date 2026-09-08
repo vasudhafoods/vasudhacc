@@ -15,6 +15,13 @@
       "when": 1788853419672,
       "tag": "0001_damp_synch",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788870476817,
+      "tag": "0002_luxuriant_jack_murdock",
+      "breakpoints": true
     }
   ]
 }

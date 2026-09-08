@@ -1,6 +1,7 @@
 import { getDashboardSession } from "@/lib/auth/authorization";
 import { DEFAULT_OPERATIONS_SETTINGS, readOperationsSettings, writeOperationsSettings } from "@/services/operations-store";
 import type { OperationsSettings } from "@/types/operations";
+import { isManagementRole } from "@/types/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,12 +12,16 @@ function integer(value: unknown, fallback: number, min: number, max: number) {
 }
 
 export async function GET() {
-  if (!await getDashboardSession()) return Response.json({ error: "Authentication required." }, { status: 401 });
+  const session = await getDashboardSession();
+  if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
+  if (!isManagementRole(session.role)) return Response.json({ error: "Management access is required." }, { status: 403 });
   return Response.json(await readOperationsSettings(), { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function PUT(request: Request) {
-  if (!await getDashboardSession()) return Response.json({ error: "Authentication required." }, { status: 401 });
+  const session = await getDashboardSession();
+  if (!session) return Response.json({ error: "Authentication required." }, { status: 401 });
+  if (!isManagementRole(session.role)) return Response.json({ error: "Management access is required." }, { status: 403 });
   const previous = await readOperationsSettings();
   const body = await request.json() as Partial<OperationsSettings>;
   const rawThresholds = body.productThresholds && typeof body.productThresholds === "object" ? body.productThresholds : previous.productThresholds;
