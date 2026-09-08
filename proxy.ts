@@ -5,13 +5,13 @@ const INTERNAL_BEARER_ROUTES = ["/api/cron/inventory", "/api/inventory", "/api/i
 
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
-  const isLoginRoute = pathname === "/login" || pathname.startsWith("/api/auth/");
+  const isLoginRoute = pathname === "/login" || pathname === "/forgot-password" || pathname.startsWith("/api/auth/");
   const isInternalBearerRoute = INTERNAL_BEARER_ROUTES.includes(pathname);
   if (isInternalBearerRoute) return NextResponse.next();
 
   const session = await readDashboardSession(request.cookies.get(DASHBOARD_SESSION_COOKIE)?.value);
   if (isLoginRoute) {
-    if (pathname === "/login" && session) return NextResponse.redirect(new URL("/", request.url));
+    if ((pathname === "/login" || pathname === "/forgot-password") && session) return NextResponse.redirect(new URL("/", request.url));
     return NextResponse.next();
   }
   if (session) return NextResponse.next();
