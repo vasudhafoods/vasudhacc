@@ -5,7 +5,8 @@ import { auditEvents, staffUsers } from "@/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import type { AuthenticatedUser, DashboardRole } from "@/types/auth";
 
-const WAREHOUSE_ROLES = ["warehouse_manager", "warehouse_staff"] as const;
+const MANAGED_STAFF_ROLES = ["warehouse_manager", "warehouse_staff", "retail_sales"] as const;
+export type ManagedStaffRole = (typeof MANAGED_STAFF_ROLES)[number];
 
 export class StaffAccountError extends Error {
   constructor(readonly code: "INVALID_ACCOUNT" | "USERNAME_EXISTS", message: string) {
@@ -14,11 +15,11 @@ export class StaffAccountError extends Error {
   }
 }
 
-export interface WarehouseStaffAccount {
+export interface StaffAccount {
   id: string;
   username: string;
   displayName: string;
-  role: "warehouse_manager" | "warehouse_staff";
+  role: ManagedStaffRole;
   active: boolean;
   lastLoginAt: string | null;
   createdAt: string;
@@ -65,7 +66,7 @@ export async function readActiveStaffIdentity(accountId: string): Promise<Authen
   return { userId: account.id, username: account.username, displayName: account.displayName, role: account.role as DashboardRole };
 }
 
-export async function listWarehouseStaffAccounts(): Promise<WarehouseStaffAccount[]> {
+export async function listStaffAccounts(): Promise<StaffAccount[]> {
   const db = getDatabase();
   const rows = await db.select({
     id: staffUsers.id,
@@ -76,23 +77,23 @@ export async function listWarehouseStaffAccounts(): Promise<WarehouseStaffAccoun
     lastLoginAt: staffUsers.lastLoginAt,
     createdAt: staffUsers.createdAt,
   }).from(staffUsers)
-    .where(inArray(staffUsers.role, [...WAREHOUSE_ROLES]))
+    .where(inArray(staffUsers.role, [...MANAGED_STAFF_ROLES]))
     .orderBy(desc(staffUsers.active), staffUsers.displayName);
 
   return rows.map((row) => ({
     ...row,
-    role: row.role as WarehouseStaffAccount["role"],
+    role: row.role as StaffAccount["role"],
     lastLoginAt: row.lastLoginAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   }));
 }
 
-export async function createWarehouseStaffAccount(input: {
+export async function createStaffAccount(input: {
   username: string;
   displayName: string;
   password: string;
-  role: "warehouse_manager" | "warehouse_staff";
-}, actorUsername: string): Promise<WarehouseStaffAccount> {
+  role: ManagedStaffRole;
+}, actorUsername: string): Promise<StaffAccount> {
   const username = normalizeUsername(input.username);
   const displayName = input.displayName.trim();
   if (!/^[a-z0-9._-]{3,50}$/.test(username)) {
@@ -104,8 +105,8 @@ export async function createWarehouseStaffAccount(input: {
   if (input.password.length < 12 || !/[A-Za-z]/.test(input.password) || !/\d/.test(input.password)) {
     throw new StaffAccountError("INVALID_ACCOUNT", "Temporary password must be at least 12 characters and include a letter and a number.");
   }
-  if (!WAREHOUSE_ROLES.includes(input.role)) {
-    throw new StaffAccountError("INVALID_ACCOUNT", "A valid warehouse role is required.");
+  if (!MANAGED_STAFF_ROLES.includes(input.role)) {
+    throw new StaffAccountError("INVALID_ACCOUNT", "A valid staff role is required.");
   }
 
   const db = getDatabase();
@@ -130,11 +131,11 @@ export async function createWarehouseStaffAccount(input: {
         entityType: "staff_user",
         entityId: account.id,
         newValue: { username, displayName, role: input.role, active: true },
-        reason: "Warehouse access granted by administrator",
+        reason: "Staff workspace access granted by administrator",
       });
       return {
         ...account,
-        role: account.role as WarehouseStaffAccount["role"],
+        role: account.role as StaffAccount["role"],
         lastLoginAt: account.lastLoginAt?.toISOString() ?? null,
         createdAt: account.createdAt.toISOString(),
       };
@@ -147,13 +148,13 @@ export async function createWarehouseStaffAccount(input: {
   }
 }
 
-export async function setWarehouseStaffAccountActive(accountId: string, active: boolean, actorUsername: string): Promise<void> {
+export async function setStaffAccountActive(accountId: string, active: boolean, actorUsername: string): Promise<void> {
   const db = getDatabase();
   const [existing] = await db.select({ id: staffUsers.id, role: staffUsers.role, active: staffUsers.active })
     .from(staffUsers)
-    .where(and(eq(staffUsers.id, accountId), inArray(staffUsers.role, [...WAREHOUSE_ROLES])))
+    .where(and(eq(staffUsers.id, accountId), inArray(staffUsers.role, [...MANAGED_STAFF_ROLES])))
     .limit(1);
-  if (!existing) throw new StaffAccountError("INVALID_ACCOUNT", "Warehouse staff account was not found.");
+  if (!existing) throw new StaffAccountError("INVALID_ACCOUNT", "Staff account was not found.");
   await db.transaction(async (tx) => {
     await tx.update(staffUsers).set({ active, updatedAt: new Date() }).where(eq(staffUsers.id, accountId));
     await tx.insert(auditEvents).values({
@@ -163,21 +164,21 @@ export async function setWarehouseStaffAccountActive(accountId: string, active: 
       entityId: accountId,
       previousValue: { active: existing.active },
       newValue: { active },
-      reason: active ? "Warehouse access restored by administrator" : "Warehouse access disabled by administrator",
+      reason: active ? "Staff access restored by administrator" : "Staff access disabled by administrator",
     });
   });
 }
 
-export async function resetWarehouseStaffPassword(accountId: string, password: string, actorUsername: string): Promise<void> {
+export async function resetStaffPassword(accountId: string, password: string, actorUsername: string): Promise<void> {
   if (password.length < 12 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
     throw new StaffAccountError("INVALID_ACCOUNT", "Temporary password must be at least 12 characters and include a letter and a number.");
   }
   const db = getDatabase();
   const [existing] = await db.select({ id: staffUsers.id, role: staffUsers.role })
     .from(staffUsers)
-    .where(and(eq(staffUsers.id, accountId), inArray(staffUsers.role, [...WAREHOUSE_ROLES])))
+    .where(and(eq(staffUsers.id, accountId), inArray(staffUsers.role, [...MANAGED_STAFF_ROLES])))
     .limit(1);
-  if (!existing) throw new StaffAccountError("INVALID_ACCOUNT", "Warehouse staff account was not found.");
+  if (!existing) throw new StaffAccountError("INVALID_ACCOUNT", "Staff account was not found.");
   const passwordHash = await hashPassword(password);
   await db.transaction(async (tx) => {
     await tx.update(staffUsers).set({ passwordHash, updatedAt: new Date() }).where(eq(staffUsers.id, accountId));
@@ -186,7 +187,7 @@ export async function resetWarehouseStaffPassword(accountId: string, password: s
       action: "staff.password_reset",
       entityType: "staff_user",
       entityId: accountId,
-      reason: "Warehouse password replaced by administrator",
+      reason: "Staff password replaced by administrator",
     });
   });
 }

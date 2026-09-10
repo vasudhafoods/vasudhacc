@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { authenticateStaffAccount, readActiveStaffIdentity } from "@/services/staff-accounts";
 import type { AuthenticatedUser, DashboardRole } from "@/types/auth";
-import { isManagementRole, isWarehouseRole } from "@/types/auth";
+import { isManagementRole, isRetailSalesRole, isWarehouseRole } from "@/types/auth";
 import { DASHBOARD_SESSION_COOKIE, isSessionConfigurationValid, readDashboardSession } from "./session";
 
 function safeEqual(left: string, right: string): boolean {
@@ -55,6 +55,13 @@ export async function requireWarehouseSession() {
   const session = await getDashboardSession();
   if (!session) redirect("/login");
   if (!isManagementRole(session.role) && !isWarehouseRole(session.role)) redirect("/login?error=access");
+  return session;
+}
+
+export async function requireSalesSession() {
+  const session = await getDashboardSession();
+  if (!session) redirect("/login");
+  if (!isManagementRole(session.role) && !isRetailSalesRole(session.role)) redirect(isWarehouseRole(session.role) ? "/warehouse" : "/login?error=access");
   return session;
 }
 

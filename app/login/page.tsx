@@ -19,7 +19,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <p className="mt-3 text-xl font-bold tracking-tight text-slate-900">Vasudha Foods</p>
         <p className="mt-1 text-[10px] font-semibold uppercase tracking-[.18em] text-slate-400">Command Center</p>
         <h1 className="mt-6 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">Choose your login</h1>
-        <p className="mt-2 text-sm text-slate-500">Management and warehouse teams have separate, role-restricted workspaces.</p>
+        <p className="mt-2 text-sm text-slate-500">Management, warehouse, and retail-sales teams have role-restricted workspaces.</p>
       </header>
 
       {message ? <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-medium text-rose-800" role="alert">{message}</div> : null}
@@ -32,8 +32,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </section>
 
         <section className={`border-t border-slate-200 bg-slate-50/70 p-6 sm:p-8 md:border-l md:border-t-0 ${portal === "warehouse" && error ? "bg-rose-50/30" : ""}`} aria-labelledby="warehouse-login-title">
-          <div className="flex items-center gap-3"><div className="grid size-11 place-items-center rounded-xl bg-[#dcece5] text-sm font-bold text-[#174f40]">W</div><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Operations</p><h2 id="warehouse-login-title" className="text-xl font-bold text-slate-950">Warehouse Team Login</h2></div></div>
-          <p className="mt-4 min-h-10 text-sm leading-6 text-slate-500">Restricted access to receive stock, add new products, review submissions, and check personal updates.</p>
+          <div className="flex items-center gap-3"><div className="grid size-11 place-items-center rounded-xl bg-[#dcece5] text-sm font-bold text-[#174f40]">O</div><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Operations</p><h2 id="warehouse-login-title" className="text-xl font-bold text-slate-950">Warehouse & Sales Login</h2></div></div>
+          <p className="mt-4 min-h-10 text-sm leading-6 text-slate-500">Warehouse users manage stock. Retail Sales users can enter offline sales, collections, and pending payment updates.</p>
           <LoginForm portal="warehouse"/>
         </section>
       </div>

@@ -39,6 +39,7 @@ export const mappingStatus = pgEnum("mapping_status", ["mapped", "missing_sku", 
 export const integrationStatus = pgEnum("integration_status", ["pending", "processing", "succeeded", "failed", "cancelled"]);
 export const staffRole = pgEnum("staff_role", ["admin", "management", "warehouse_manager", "warehouse_staff", "retail_sales"]);
 export const recipientType = pgEnum("recipient_type", ["salesperson", "retail_store", "distributor", "event", "sampling", "institutional_customer", "other"]);
+export const offlineCustomerType = pgEnum("offline_customer_type", ["retail", "b2b"]);
 
 export const staffUsers = pgTable("staff_users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -172,6 +173,45 @@ export const retailRecipients = pgTable("retail_recipients", {
   active: boolean("active").default(true).notNull(),
   ...auditColumns,
 });
+
+export const offlineSales = pgTable("offline_sales", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  saleNumber: text("sale_number").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  saleDate: timestamp("sale_date", { withTimezone: true }).notNull(),
+  customerName: text("customer_name").notNull(),
+  customerContact: text("customer_contact"),
+  customerType: offlineCustomerType("customer_type").default("retail").notNull(),
+  isNewB2bCustomer: boolean("is_new_b2b_customer").default(false).notNull(),
+  totalAmountPaisa: integer("total_amount_paisa").notNull(),
+  reference: text("reference"),
+  notes: text("notes"),
+  createdBy: text("created_by").notNull(),
+  ...auditColumns,
+}, (table) => [
+  uniqueIndex("offline_sales_number_unique").on(table.saleNumber),
+  uniqueIndex("offline_sales_idempotency_unique").on(table.idempotencyKey),
+  index("offline_sales_sale_date_idx").on(table.saleDate),
+  index("offline_sales_customer_type_idx").on(table.customerType, table.saleDate),
+  check("offline_sales_total_positive", sql`${table.totalAmountPaisa} > 0`),
+]);
+
+export const offlineSaleCollections = pgTable("offline_sale_collections", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  offlineSaleId: uuid("offline_sale_id").notNull().references(() => offlineSales.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key").notNull(),
+  amountPaisa: integer("amount_paisa").notNull(),
+  collectedAt: timestamp("collected_at", { withTimezone: true }).notNull(),
+  reference: text("reference"),
+  notes: text("notes"),
+  recordedBy: text("recorded_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("offline_sale_collections_idempotency_unique").on(table.idempotencyKey),
+  index("offline_sale_collections_sale_idx").on(table.offlineSaleId, table.collectedAt),
+  index("offline_sale_collections_collected_idx").on(table.collectedAt),
+  check("offline_sale_collections_amount_positive", sql`${table.amountPaisa} > 0`),
+]);
 
 export const integrationOutbox = pgTable("integration_outbox", {
   id: uuid("id").defaultRandom().primaryKey(),

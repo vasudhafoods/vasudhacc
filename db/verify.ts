@@ -20,7 +20,7 @@ async function main() {
           'products', 'shopify_mappings', 'warehouse_locations', 'inventory_batches',
           'inventory_balances', 'inventory_transactions', 'inventory_transaction_lines',
           'retail_recipients', 'integration_outbox', 'shopify_webhook_events',
-          'audit_events', 'staff_users', 'inventory_snapshots',
+          'audit_events', 'staff_users', 'offline_sales', 'offline_sale_collections', 'inventory_snapshots',
           'operations_settings', 'inventory_snapshot_runs'
         ])
     `;

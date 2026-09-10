@@ -23,6 +23,10 @@ export function isWarehouseRole(role: DashboardRole): boolean {
   return role === "warehouse_manager" || role === "warehouse_staff";
 }
 
+export function isRetailSalesRole(role: DashboardRole): boolean {
+  return role === "retail_sales";
+}
+
 export function isManagementRole(role: DashboardRole): boolean {
   return role === "admin" || role === "management";
 }

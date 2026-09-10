@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createDashboardSession, DASHBOARD_SESSION_COOKIE, DASHBOARD_SESSION_MAX_AGE_SECONDS } from "@/lib/auth/session";
 import { authenticateDashboardCredentials, isDashboardAuthConfigured } from "@/lib/auth/authorization";
-import { isManagementRole, isWarehouseRole } from "@/types/auth";
+import { isManagementRole, isRetailSalesRole, isWarehouseRole } from "@/types/auth";
 
 export async function POST(request: Request) {
   const formData = await request.formData();
@@ -14,12 +14,12 @@ export async function POST(request: Request) {
     return NextResponse.redirect(loginUrl("configuration"), 303);
   }
   const user = await authenticateDashboardCredentials(username, password);
-  const portalMatchesRole = user && (portal === "warehouse" ? isWarehouseRole(user.role) : isManagementRole(user.role));
+  const portalMatchesRole = user && (portal === "warehouse" ? isWarehouseRole(user.role) || isRetailSalesRole(user.role) : isManagementRole(user.role));
   if (!user || !portalMatchesRole) {
     return NextResponse.redirect(loginUrl("credentials"), 303);
   }
 
-  const response = NextResponse.redirect(new URL(isWarehouseRole(user.role) ? "/warehouse" : "/", request.url), 303);
+  const response = NextResponse.redirect(new URL(isWarehouseRole(user.role) ? "/warehouse" : isRetailSalesRole(user.role) ? "/sales" : "/", request.url), 303);
   response.cookies.set(DASHBOARD_SESSION_COOKIE, await createDashboardSession(user), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

@@ -1,9 +1,9 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
 import {
-  createWarehouseStaffAccount,
-  listWarehouseStaffAccounts,
-  resetWarehouseStaffPassword,
-  setWarehouseStaffAccountActive,
+  createStaffAccount,
+  listStaffAccounts,
+  resetStaffPassword,
+  setStaffAccountActive,
   StaffAccountError,
 } from "@/services/staff-accounts";
 
@@ -20,7 +20,7 @@ async function authorizeAdmin() {
 export async function GET() {
   const authorization = await authorizeAdmin();
   if ("response" in authorization) return authorization.response;
-  return Response.json({ ok: true, accounts: await listWarehouseStaffAccounts() }, { headers: { "Cache-Control": "private, no-store" } });
+  return Response.json({ ok: true, accounts: await listStaffAccounts() }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {
@@ -28,8 +28,8 @@ export async function POST(request: Request) {
   if ("response" in authorization) return authorization.response;
   try {
     const body = await request.json() as Record<string, unknown>;
-    const role = body.role === "warehouse_manager" ? "warehouse_manager" : "warehouse_staff";
-    const account = await createWarehouseStaffAccount({
+    const role = body.role === "warehouse_manager" || body.role === "retail_sales" ? body.role : "warehouse_staff";
+    const account = await createStaffAccount({
       username: String(body.username ?? ""),
       displayName: String(body.displayName ?? ""),
       password: String(body.password ?? ""),
@@ -48,11 +48,11 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>;
     if (typeof body.password === "string") {
-      await resetWarehouseStaffPassword(String(body.accountId ?? ""), body.password, authorization.session.username);
+      await resetStaffPassword(String(body.accountId ?? ""), body.password, authorization.session.username);
       return Response.json({ ok: true }, { headers: { "Cache-Control": "private, no-store" } });
     }
     if (typeof body.active !== "boolean") return Response.json({ error: { code: "INVALID_ACCOUNT", message: "An active status is required." } }, { status: 400 });
-    await setWarehouseStaffAccountActive(String(body.accountId ?? ""), body.active, authorization.session.username);
+    await setStaffAccountActive(String(body.accountId ?? ""), body.active, authorization.session.username);
     return Response.json({ ok: true }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof StaffAccountError) return Response.json({ error: { code: error.code, message: error.message } }, { status: 400 });

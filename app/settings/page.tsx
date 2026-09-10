@@ -6,7 +6,7 @@ import { OperationsSettingsForm } from "@/components/settings/operations-setting
 import { ShopifyCatalogSync } from "@/components/settings/shopify-catalog-sync";
 import { StaffAccountsPanel } from "@/components/settings/staff-accounts-panel";
 import { getWarehouseFoundationStatus } from "@/services/warehouse-foundation";
-import { listWarehouseStaffAccounts } from "@/services/staff-accounts";
+import { listStaffAccounts } from "@/services/staff-accounts";
 
 export default async function SettingsPage() {
   const session = await requireDashboardSession();
@@ -15,7 +15,7 @@ export default async function SettingsPage() {
     readOperationsSettings(),
     getInventoryFeed(),
     getWarehouseFoundationStatus(),
-    session.role === "admin" ? listWarehouseStaffAccounts() : Promise.resolve([]),
+    session.role === "admin" ? listStaffAccounts() : Promise.resolve([]),
   ]);
   const products = [...new Map(feed.items.map((item) => [item.productId, { id: item.productId, title: item.productTitle }])).values()].sort((a, b) => a.title.localeCompare(b.title));
   return <div className="space-y-6">
