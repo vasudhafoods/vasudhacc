@@ -36,15 +36,15 @@ function productAuditActivity(row: typeof auditEvents.$inferSelect): WarehouseAc
 
 export async function getWarehouseWorkspaceData(actorUsername: string): Promise<WarehouseWorkspaceData> {
   const db = getDatabase();
-  const [productRows, mappingRows, locationRows, retailBalanceRows, transactionRows, productAuditRows] = await Promise.all([
+  const [productRows, mappingRows, locationRows, balanceRows, transactionRows, productAuditRows] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize })
       .from(products).where(eq(products.active, true)).orderBy(products.name, products.sku),
     db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId, status: shopifyMappings.status })
       .from(shopifyMappings),
     db.select({ id: warehouseLocations.id, code: warehouseLocations.code, name: warehouseLocations.name })
       .from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
-    db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved })
-      .from(inventoryBalances).where(eq(inventoryBalances.bucket, "retail")),
+    db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, bucket: inventoryBalances.bucket, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved })
+      .from(inventoryBalances),
     db.select({
       id: inventoryTransactions.id,
       transactionNumber: inventoryTransactions.transactionNumber,
@@ -53,8 +53,8 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
       occurredAt: inventoryTransactions.occurredAt,
       metadata: inventoryTransactions.metadata,
     }).from(inventoryTransactions)
-      .where(and(eq(inventoryTransactions.actorUsername, actorUsername), inArray(inventoryTransactions.type, ["stock_received", "retail_issue"])))
-      .orderBy(desc(inventoryTransactions.occurredAt)).limit(12),
+      .where(and(eq(inventoryTransactions.actorUsername, actorUsername), inArray(inventoryTransactions.type, ["stock_received", "retail_issue", "return", "channel_transfer", "manual_adjustment"])))
+      .orderBy(desc(inventoryTransactions.occurredAt)).limit(20),
     db.select().from(auditEvents)
       .where(and(eq(auditEvents.actorUsername, actorUsername), eq(auditEvents.action, "product.created")))
       .orderBy(desc(auditEvents.createdAt)).limit(12),
@@ -108,6 +108,46 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
         });
         continue;
       }
+      if (transaction.type === "return") {
+        const channel = transaction.metadata.channel === "shopify" ? "Shopify" : "Retail";
+        const totalQuantity = transactionLines.filter((line) => line.bucket === "qc" && line.quantity > 0).reduce((total, line) => total + line.quantity, 0);
+        transactionActivities.push({
+          id: `return-${transaction.id}`,
+          kind: "return_received",
+          title: `${totalQuantity} returned packet${totalQuantity === 1 ? "" : "s"} received into QC`,
+          reference: transaction.referenceId ? `${channel} · ${transaction.referenceId}` : `${channel} · ${transaction.transactionNumber}`,
+          occurredAt: transaction.occurredAt.toISOString(),
+          details: [first ? `${first.productName} (${first.sku})` : "", first ? `Location: ${first.locationName}` : ""].filter(Boolean),
+        });
+        continue;
+      }
+      if (transaction.type === "channel_transfer" && transaction.metadata.fromBucket === "qc") {
+        const target = typeof transaction.metadata.toBucket === "string" ? transaction.metadata.toBucket : "reviewed stock";
+        const moved = transactionLines.find((line) => line.bucket === target && line.quantity > 0);
+        transactionActivities.push({
+          id: `qc-${transaction.id}`,
+          kind: "qc_released",
+          title: `${moved?.quantity ?? 0} QC packet${moved?.quantity === 1 ? "" : "s"} moved to ${target}`,
+          reference: transaction.referenceId ? `${transaction.transactionNumber} · ${transaction.referenceId}` : transaction.transactionNumber,
+          occurredAt: transaction.occurredAt.toISOString(),
+          details: [moved ? `${moved.productName} (${moved.sku})` : "", moved ? `Location: ${moved.locationName}` : ""].filter(Boolean),
+        });
+        continue;
+      }
+      if (transaction.type === "manual_adjustment" && transaction.metadata.action === "disposal") {
+        const disposed = transactionLines.find((line) => line.quantity < 0);
+        const disposalReason = typeof transaction.metadata.disposalReason === "string" ? transaction.metadata.disposalReason.replaceAll("_", " ") : "recorded reason";
+        transactionActivities.push({
+          id: `disposal-${transaction.id}`,
+          kind: "stock_disposed",
+          title: `${Math.abs(disposed?.quantity ?? 0)} packet${Math.abs(disposed?.quantity ?? 0) === 1 ? "" : "s"} disposed`,
+          reference: transaction.referenceId ? `${transaction.transactionNumber} · ${transaction.referenceId}` : transaction.transactionNumber,
+          occurredAt: transaction.occurredAt.toISOString(),
+          details: [disposed ? `${disposed.productName} (${disposed.sku})` : "", disposed ? `From: ${disposed.bucket}` : "", `Reason: ${disposalReason}`].filter(Boolean),
+        });
+        continue;
+      }
+      if (transaction.type !== "stock_received") continue;
       const batchNumber = typeof transaction.metadata.batchNumber === "string" ? transaction.metadata.batchNumber : null;
       transactionActivities.push({
         id: `receipt-${transaction.id}`,
@@ -129,13 +169,17 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     .sort((left, right) => new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime())
     .slice(0, 20);
 
-  const retailBalances = retailBalanceRows.map((balance) => ({
-    productId: balance.productId,
-    warehouseLocationId: balance.warehouseLocationId,
+  const balances = balanceRows.map((balance) => ({
+    ...balance,
     available: Math.max(0, balance.onHand - balance.reserved),
   }));
+  const retailBalances = balances.filter((balance) => balance.bucket === "retail").map((balance) => ({
+    productId: balance.productId,
+    warehouseLocationId: balance.warehouseLocationId,
+    available: balance.available,
+  }));
 
-  return { products: productOptions, locations: locationRows, retailBalances, activities };
+  return { products: productOptions, locations: locationRows, retailBalances, balances, activities };
 }
 
 export async function createWarehouseProduct(input: {

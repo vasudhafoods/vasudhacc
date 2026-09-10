@@ -2,9 +2,9 @@
 
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import type { ShopifySyncStatus, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
+import type { ShopifySyncStatus, WarehouseInventoryBucket, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
-type Panel = "receive" | "dispatch" | "product" | "activity";
+type Panel = "receive" | "dispatch" | "returns" | "disposal" | "product" | "activity";
 type Step = "edit" | "review" | "success";
 
 interface ReceiptDraft {
@@ -40,6 +40,35 @@ interface DispatchDraft {
   lines: DispatchLineDraft[];
 }
 
+interface ReturnDraft {
+  channel: "retail" | "shopify";
+  productId: string;
+  warehouseLocationId: string;
+  quantity: string;
+  referenceId: string;
+  reason: string;
+  notes: string;
+}
+
+interface QcDraft {
+  productId: string;
+  warehouseLocationId: string;
+  quantity: string;
+  toBucket: "online" | "retail" | "buffer" | "damaged";
+  referenceId: string;
+  reason: string;
+}
+
+interface DisposalDraft {
+  productId: string;
+  warehouseLocationId: string;
+  sourceBucket: WarehouseInventoryBucket;
+  quantity: string;
+  disposalReason: "expired" | "damaged" | "contaminated" | "quality_rejected" | "other";
+  referenceId: string;
+  notes: string;
+}
+
 interface ReceiptSuccess {
   transactionNumber: string;
   receivedQuantity: number;
@@ -51,6 +80,28 @@ interface RetailDispatchSuccess {
   totalQuantity: number;
   destination: string;
   lines: { productId: string; productName: string; sku: string; quantity: number; closingRetailBalance: number }[];
+}
+
+interface ReturnSuccess {
+  transactionNumber: string;
+  quantity: number;
+  qcClosingBalance: number;
+  channel: "retail" | "shopify";
+}
+
+interface QcSuccess {
+  transactionNumber: string;
+  fromClosingBalance: number;
+  toClosingBalance: number;
+  shopifySync: ShopifySyncStatus;
+}
+
+interface DisposalSuccess {
+  transactionNumber: string;
+  quantity: number;
+  sourceBucket: WarehouseInventoryBucket;
+  closingBalance: number;
+  shopifySync: ShopifySyncStatus;
 }
 
 const EMPTY_PRODUCT: ProductDraft = { sku: "", name: "", packSize: "", barcode: "" };

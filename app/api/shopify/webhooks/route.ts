@@ -6,6 +6,7 @@ import {
   type ShopifyWebhookTopic,
   verifyShopifyWebhook,
 } from "@/services/shopify-webhooks";
+import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,7 +49,10 @@ export async function POST(request: Request) {
       return json({ error: { code: "INVALID_JSON", message: "Webhook payload is not valid JSON." } }, 400);
     }
     const result = await processShopifyWebhook({ eventId, topic, payloadHash: shopifyPayloadHash(rawBody), payload });
-    return json({ ok: true, ...result });
+    const shopifySync = result.transactionId && topic === "refunds/create"
+      ? await attemptAutomaticShopifySync(result.transactionId, "pending")
+      : "not_required";
+    return json({ ok: true, ...result, shopifySync });
   } catch (error) {
     if (error instanceof EnvironmentConfigurationError) {
       return json({ error: { code: error.code, message: error.message } }, 503);

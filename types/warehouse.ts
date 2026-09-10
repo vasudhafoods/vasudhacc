@@ -14,6 +14,17 @@ export interface WarehouseRetailBalance {
   available: number;
 }
 
+export type WarehouseInventoryBucket = "online" | "retail" | "buffer" | "qc" | "damaged";
+
+export interface WarehouseBucketBalance {
+  productId: string;
+  warehouseLocationId: string;
+  bucket: WarehouseInventoryBucket;
+  onHand: number;
+  reserved: number;
+  available: number;
+}
+
 export interface WarehouseLocationOption {
   id: string;
   code: string;
@@ -22,7 +33,7 @@ export interface WarehouseLocationOption {
 
 export interface WarehouseActivity {
   id: string;
-  kind: "stock_received" | "retail_dispatched" | "product_created";
+  kind: "stock_received" | "retail_dispatched" | "return_received" | "qc_released" | "stock_disposed" | "product_created";
   title: string;
   reference: string;
   occurredAt: string;
@@ -33,5 +44,6 @@ export interface WarehouseWorkspaceData {
   products: WarehouseProductOption[];
   locations: WarehouseLocationOption[];
   retailBalances: WarehouseRetailBalance[];
+  balances: WarehouseBucketBalance[];
   activities: WarehouseActivity[];
 }

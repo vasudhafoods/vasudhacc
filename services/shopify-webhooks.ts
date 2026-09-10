@@ -4,6 +4,7 @@ import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import {
   auditEvents,
+  integrationOutbox,
   inventoryBalances,
   inventoryTransactionLines,
   inventoryTransactions,
@@ -57,7 +58,7 @@ interface ResolvedMovement {
   sku: string;
   warehouseLocationId: string;
   packetQuantity: number;
-  sourceVariants: { variantId: string; variantQuantity: number; packetMultiplier: number }[];
+  sourceVariants: { variantId: string; inventoryItemId: string; shopifyLocationId: string; variantQuantity: number; packetMultiplier: number }[];
 }
 
 export interface ShopifyWebhookResult {
@@ -156,6 +157,7 @@ type MappingRow = {
   productName: string;
   sku: string;
   shopifyProductId: string;
+  shopifyInventoryItemId: string;
   shopifyLocationId: string;
   shopifyLocationName: string;
   status: "mapped" | "missing_sku" | "conflict" | "inactive";
@@ -168,6 +170,7 @@ async function variantMapping(variantId: string, locationId: string | null): Pro
     productName: products.name,
     sku: products.sku,
     shopifyProductId: shopifyMappings.shopifyProductId,
+    shopifyInventoryItemId: shopifyMappings.shopifyInventoryItemId,
     shopifyLocationId: shopifyMappings.shopifyLocationId,
     shopifyLocationName: shopifyMappings.shopifyLocationName,
     status: shopifyMappings.status,
@@ -247,7 +250,7 @@ async function resolveMovements(lines: RawMovement[]): Promise<ResolvedMovement[
     const current = aggregate.get(key);
     if (current) {
       current.packetQuantity += packetQuantity;
-      current.sourceVariants.push({ variantId: line.variantId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier });
+      current.sourceVariants.push({ variantId: line.variantId, inventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier });
     } else {
       aggregate.set(key, {
         productId: base.productId,
@@ -255,7 +258,7 @@ async function resolveMovements(lines: RawMovement[]): Promise<ResolvedMovement[
         sku: base.sku,
         warehouseLocationId: locationId,
         packetQuantity,
-        sourceVariants: [{ variantId: line.variantId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier }],
+        sourceVariants: [{ variantId: line.variantId, inventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier }],
       });
     }
   }
@@ -279,17 +282,18 @@ async function applyInventoryMovement(
   }
 
   return db.transaction(async (tx) => {
+    const targetBucket = direction === "out" ? "online" as const : "qc" as const;
     await tx.insert(inventoryBalances).values(movements.map((movement) => ({
       productId: movement.productId,
       warehouseLocationId: movement.warehouseLocationId,
-      bucket: "online" as const,
+      bucket: targetBucket,
     }))).onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
     const productIds = [...new Set(movements.map((movement) => movement.productId))];
     const warehouseIds = [...new Set(movements.map((movement) => movement.warehouseLocationId))];
     const balances = await tx.select().from(inventoryBalances).where(and(
       inArray(inventoryBalances.productId, productIds),
       inArray(inventoryBalances.warehouseLocationId, warehouseIds),
-      eq(inventoryBalances.bucket, "online"),
+      eq(inventoryBalances.bucket, targetBucket),
     )).orderBy(inventoryBalances.productId, inventoryBalances.warehouseLocationId).for("update");
     const balanceByScope = new Map(balances.map((balance) => [`${balance.productId}:${balance.warehouseLocationId}`, balance]));
 
@@ -310,8 +314,8 @@ async function applyInventoryMovement(
       referenceId: externalId,
       shopifyOrderId: gid("Order", orderId),
       actorUsername: "shopify-webhook",
-      reason: direction === "out" ? "Shopify fulfillment shipped" : "Shopify fulfilled items returned to inventory",
-      metadata: { topic, externalId, totalPackets, unit: "individual_packet", movements },
+      reason: direction === "out" ? "Shopify fulfillment shipped" : "Shopify returned items received into QC",
+      metadata: { topic, externalId, totalPackets, unit: "individual_packet", targetBucket, movements },
     }).returning({ id: inventoryTransactions.id });
 
     const ledgerLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
@@ -330,19 +334,36 @@ async function applyInventoryMovement(
         transactionId: transaction.id,
         productId: movement.productId,
         warehouseLocationId: movement.warehouseLocationId,
-        bucket: "online",
+        bucket: targetBucket,
         quantityDelta: delta,
         openingBalance: balance.onHand,
         closingBalance: closing,
       });
-      const scope = `${movement.productId}:${movement.warehouseLocationId}:online`;
+      const scope = `${movement.productId}:${movement.warehouseLocationId}:${targetBucket}`;
       previousValue[scope] = balance.onHand;
       newValue[scope] = closing;
     }
     await tx.insert(inventoryTransactionLines).values(ledgerLines);
+    if (direction === "in") {
+      const quarantine = new Map<string, { inventoryItemId: string; locationId: string; quantity: number }>();
+      for (const movement of movements) {
+        for (const variant of movement.sourceVariants) {
+          const key = `${variant.inventoryItemId}:${variant.shopifyLocationId}`;
+          const current = quarantine.get(key);
+          if (current) current.quantity += variant.variantQuantity;
+          else quarantine.set(key, { inventoryItemId: variant.inventoryItemId, locationId: variant.shopifyLocationId, quantity: variant.variantQuantity });
+        }
+      }
+      await tx.insert(integrationOutbox).values([...quarantine.values()].map((item, index) => ({
+        transactionId: transaction.id,
+        operation: "shopify_inventory_adjust",
+        idempotencyKey: `${idempotencyKey}:quarantine:${index}`,
+        payload: { shopifyInventoryItemId: item.inventoryItemId, shopifyLocationId: item.locationId, quantityDelta: -item.quantity, reason: "correction" },
+      })));
+    }
     await tx.insert(auditEvents).values({
       actorUsername: "shopify-webhook",
-      action: direction === "out" ? "inventory.shopify_fulfilled" : "inventory.shopify_return_restocked",
+      action: direction === "out" ? "inventory.shopify_fulfilled" : "inventory.shopify_return_quarantined",
       entityType: "inventory_transaction",
       entityId: transaction.id,
       previousValue,
