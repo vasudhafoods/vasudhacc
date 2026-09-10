@@ -25,7 +25,7 @@ function sheet(name: string, rows: Cell[][]): string {
 export function buildExecutiveExcel(data: ExecutiveDashboardData): string {
   const { sales, trend, warehouse, inventory } = data;
   const summary: Cell[][] = [
-    ["Vasudha Foods CEO Command Report"],
+    ["Vasudha Foods Management Command Report"],
     ["Generated at", data.generatedAt],
     ["Reporting period", sales ? `${sales.from} to ${sales.to}` : "Sales unavailable"],
     ["Metric", "Value"],

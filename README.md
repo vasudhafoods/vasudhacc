@@ -2,7 +2,7 @@
 
 Internal Shopify inventory intelligence for Vasudha Foods. The dashboard reads current inventory from Shopify, stores daily snapshots and warehouse records in Neon PostgreSQL, and compares live stock with the two prior calendar days.
 
-The management landing page is a CEO command summary for the latest 30 days. It combines Shopify sales, order-journey/UTM attribution, warehouse channel stock, exceptions, and explainable action recommendations. **Download CEO Excel** produces a multi-sheet workbook containing the executive summary, daily sales, product performance, marketing sources and campaigns, inventory, recommendations, and identified data gaps.
+The management landing page is a command summary for the latest 30 days. It combines Shopify sales, order-journey/UTM attribution, warehouse channel stock, exceptions, and explainable action recommendations. **Download Management Report** produces a multi-sheet workbook containing the executive summary, daily sales, product performance, marketing sources and campaigns, inventory, recommendations, and identified data gaps.
 
 ## Stack
 

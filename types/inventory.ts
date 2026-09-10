@@ -40,3 +40,14 @@ export interface DailyTotal {
   date: string;
   inventory: number;
 }
+
+export interface ProductPhysicalStock {
+  shopifyProductId: string;
+  recorded: boolean;
+  actual: number;
+  online: number;
+  retail: number;
+  buffer: number;
+  qc: number;
+  damaged: number;
+}

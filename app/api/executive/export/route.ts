@@ -16,7 +16,7 @@ export async function GET() {
     return new Response(workbook, {
       headers: {
         "Content-Type": "application/vnd.ms-excel; charset=utf-8",
-        "Content-Disposition": `attachment; filename="vasudha-ceo-report-${data.generatedAt.slice(0, 10)}.xls"`,
+        "Content-Disposition": `attachment; filename="vasudha-management-report-${data.generatedAt.slice(0, 10)}.xls"`,
         "Cache-Control": "private, no-store, max-age=0",
       },
     });

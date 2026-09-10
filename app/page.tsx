@@ -29,13 +29,13 @@ export default async function Home() {
     <header className="rounded-2xl bg-[#143f34] px-5 py-6 text-white shadow-sm sm:px-7">
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[.18em] text-emerald-200">CEO command summary · Last 30 days</p>
+          <p className="text-xs font-semibold uppercase tracking-[.18em] text-emerald-200">Management command summary · Last 30 days</p>
           <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Sales, marketing and inventory—in one view</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50">A live executive brief from Shopify and the warehouse ledger, with exceptions and next actions presented first.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <span className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold ${urgentActions ? "bg-amber-100 text-amber-950" : "bg-emerald-100 text-emerald-950"}`}><span className={`size-2 rounded-full ${urgentActions ? "bg-amber-500" : "bg-emerald-500"}`}/>{urgentActions ? `${urgentActions} priority actions` : "No urgent exception"}</span>
-          <a href="/api/executive/export" className="inline-flex items-center rounded-xl border border-white/30 bg-white px-4 py-2 text-xs font-bold text-[#143f34]">Download CEO Excel</a>
+          <a href="/api/executive/export" className="inline-flex items-center rounded-xl border border-white/30 bg-white px-4 py-2 text-xs font-bold text-[#143f34]">Download Management Report</a>
         </div>
       </div>
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-white/15 pt-4 text-[11px] text-emerald-100"><span>Shopify: {view.mode === "live" ? "Live" : view.mode === "snapshot" ? "Snapshot fallback" : "Unavailable"}</span><span>Warehouse: {warehouse.initialized ? "Connected" : "Not ready"}</span><span>Generated: {new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(data.generatedAt))}</span></div>
@@ -55,7 +55,7 @@ export default async function Home() {
     <section className="grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
       <div className="rounded-2xl border border-slate-200 bg-white">
         <div className="flex flex-col justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start">
-          <div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#2d725f]">Decision intelligence</p><h2 className="mt-1 text-lg font-bold text-slate-950">What needs the CEO’s attention</h2><p className="mt-1 text-xs leading-5 text-slate-500">Explainable, data-based suggestions with no added AI API cost. Each action cites the condition that triggered it.</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#2d725f]">Decision intelligence</p><h2 className="mt-1 text-lg font-bold text-slate-950">What needs management attention</h2><p className="mt-1 text-xs leading-5 text-slate-500">Explainable, data-based suggestions with no added AI API cost. Each action cites the condition that triggered it.</p></div>
           <Link href="/attention" className="shrink-0 text-xs font-bold text-emerald-700">All stock alerts →</Link>
         </div>
         <div className="divide-y divide-slate-100">{data.recommendations.slice(0, 6).map((recommendation) => <Recommendation key={recommendation.id} item={recommendation}/>)}</div>
