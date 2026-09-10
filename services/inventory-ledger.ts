@@ -11,6 +11,7 @@ import {
   inventoryTransactions,
   products,
   shopifyMappings,
+  warehouseLocations,
   type InventoryBucket,
 } from "@/db/schema";
 import type { ShopifySyncStatus } from "@/types/warehouse";
