@@ -1,5 +1,6 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
 import { InventoryCommandError, receiveAndAllocateStock } from "@/services/inventory-ledger";
+import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,7 +39,8 @@ export async function POST(request: Request) {
       shopifyMappingId: body.shopifyMappingId ? String(body.shopifyMappingId) : undefined,
       referenceId: body.referenceId ? String(body.referenceId) : undefined,
     });
-    return Response.json({ ok: true, result }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
+    const shopifySync = await attemptAutomaticShopifySync(result.transactionId, result.shopifySync);
+    return Response.json({ ok: true, result: { ...result, shopifySync } }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof InventoryCommandError) {
       return Response.json({ error: { code: error.code, message: error.message } }, { status: error.code === "NOT_FOUND" ? 404 : 400 });

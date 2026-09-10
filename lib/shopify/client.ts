@@ -1,9 +1,10 @@
 import "server-only";
 import { getShopifyConfig } from "@/lib/validation/env";
 import { getShopifyAccessToken, invalidateShopifyAccessToken } from "./access-token";
-import { ShopifyAuthenticationError, ShopifyGraphQLError, ShopifyNetworkError, ShopifyRateLimitError } from "./errors";
+import { ShopifyAuthenticationError, ShopifyGraphQLError, ShopifyNetworkError, ShopifyRateLimitError, ShopifyUserError } from "./errors";
 
 interface GraphQLErrorShape { message: string; extensions?: { code?: string }; }
+interface UserErrorShape { message: string; code?: string; }
 interface GraphQLResponse<T> {
   data?: T;
   errors?: GraphQLErrorShape[];
@@ -13,18 +14,22 @@ interface GraphQLResponse<T> {
 const MAX_ATTEMPTS = 3;
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-function collectUserErrors(data: unknown): string[] {
+function collectUserErrors(data: unknown): UserErrorShape[] {
   if (!data || typeof data !== "object") return [];
-  const messages: string[] = [];
+  const errors: UserErrorShape[] = [];
   for (const payload of Object.values(data)) {
     if (!payload || typeof payload !== "object" || !("userErrors" in payload)) continue;
     const userErrors = (payload as { userErrors?: unknown }).userErrors;
     if (!Array.isArray(userErrors)) continue;
     for (const userError of userErrors) {
-      if (userError && typeof userError === "object" && "message" in userError && typeof userError.message === "string") messages.push(userError.message);
+      if (!userError || typeof userError !== "object" || !("message" in userError) || typeof userError.message !== "string") continue;
+      errors.push({
+        message: userError.message,
+        code: "code" in userError && typeof userError.code === "string" ? userError.code : undefined,
+      });
     }
   }
-  return messages;
+  return errors;
 }
 
 function retryDelay(attempt: number, response?: GraphQLResponse<unknown>): number {
@@ -68,7 +73,7 @@ export async function shopifyGraphQL<T>(query: string, variables: Record<string,
     if (body.errors?.length) throw new ShopifyGraphQLError(body.errors.map((error) => error.message).join("; "));
     if (!body.data) throw new ShopifyGraphQLError("Shopify response did not include data.");
     const userErrors = collectUserErrors(body.data);
-    if (userErrors.length) throw new ShopifyGraphQLError(userErrors.join("; "));
+    if (userErrors.length) throw new ShopifyUserError(userErrors.map((error) => error.message).join("; "), userErrors.flatMap((error) => error.code ? [error.code] : []));
     return body.data;
   }
   throw new ShopifyRateLimitError();

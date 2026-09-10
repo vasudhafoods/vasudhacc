@@ -24,6 +24,8 @@ SHOPIFY_STORE_DOMAIN=your-store.myshopify.com
 SHOPIFY_CLIENT_ID=your-dev-dashboard-client-id
 SHOPIFY_CLIENT_SECRET=your-dev-dashboard-client-secret
 SHOPIFY_API_VERSION=2026-07
+# Optional; Vercel's production URL is detected automatically.
+APP_BASE_URL=https://commandcenter.vasudhafoods.com
 
 DASHBOARD_USERNAME=vasudha-admin
 DASHBOARD_PASSWORD=a-strong-password-with-at-least-12-characters
@@ -44,7 +46,7 @@ Never commit `.env.local`, expose these values through `NEXT_PUBLIC_` variables,
 The installed Shopify Dev Dashboard app requires these Admin API scopes:
 
 ```text
-read_products,read_inventory,read_locations,read_orders
+read_products,read_inventory,write_inventory,read_locations,read_orders,read_fulfillments
 ```
 
 After changing scopes, release a new app version and approve the updated installation on the store. The app must remain installed for client-credentials authentication to work.
@@ -53,11 +55,15 @@ After changing scopes, release a new app version and approve the updated install
 
 Management pages require the configured internal-admin username and password. Administrators can create database-backed warehouse accounts under **Settings → Warehouse staff accounts**. Successful login creates a signed, HTTP-only, SameSite session cookie that expires after 12 hours, and the UI provides a Sign out action.
 
-Warehouse staff are restricted to the Warehouse desk. They can receive and allocate new stock, create product records, review each entry before submission, and see only the updates submitted under their username. The restriction is enforced in the page routing and again at every mutation API. Disabling an account blocks its active session on the next server request.
+Warehouse staff are restricted to the Warehouse desk. They can receive and allocate new stock, dispatch Retail stock, create product records, review each entry before submission, and see only the updates submitted under their username. A retail dispatch accepts multiple products, shows available Retail packets, requires a destination and invoice/order reference, and presents a final line-by-line balance summary. The restriction is enforced in the page routing and again at every mutation API. Disabling an account blocks its active session on the next server request.
 
 Stock receipts are written through the transactional inventory ledger, including immutable transaction lines and an audit event. Product creation is also audited. A product created by warehouse staff must be linked through Shopify catalogue synchronization before its first automatically allocated receipt.
 
 Warehouse receipts use individual packets as the physical base unit. After damaged units are removed, the screen automatically allocates 40% Online, 40% Retail, and the integer remainder to Buffer. Synced Pack-of-3/Pack-of-5/Pack-of-10 Shopify variants are excluded from physical receiving so the same packet pool is not counted multiple times.
+
+The Online allocation is sent to the mapped Shopify Pack-of-1 inventory item immediately after the Neon transaction commits. Delivery uses Shopify's idempotent inventory-adjustment mutation, so retries cannot add the same receipt twice. If Shopify is temporarily unavailable, the update stays in the Neon outbox and is retried by the daily scheduled job or the next manual **Sync Shopify now** action.
+
+The command center also maintains signed `fulfillments/create` and `refunds/create` Shopify webhooks. A fulfillment reduces the Neon Online bucket only after Shopify marks stock as shipped. An explicit fulfilled-item return adds packets back. Cancelling an unfulfilled line does not alter the physical ledger because those packets never left the warehouse. Every webhook is HMAC-verified, store-verified, event-deduplicated, and written through the same immutable ledger. Shopify Pack-of-N quantities are converted to individual packets using the matching Pack-of-1 product (for example, two Pack-of-5 variants reduce stock by 10 packets). A product without one unambiguous base-packet mapping is rejected instead of corrupting stock.
 
 Use a unique password of at least 12 characters and a cryptographically random `SESSION_SECRET` of at least 32 characters. Replace the admin password in Vercel when needed; rotate `SESSION_SECRET` and redeploy when every existing session must be invalidated.
 
@@ -81,7 +87,7 @@ Use a unique password of at least 12 characters and a cryptographically random `
 
 ## Daily snapshots
 
-Vercel Cron calls `GET /api/cron/inventory` at `02:30 UTC`, or `08:00 IST`, every day. The route fetches current Shopify inventory, writes the dated snapshot to Neon, and sends the configured Resend summary email to every comma-separated address in `ALERT_EMAIL_TO`.
+Vercel Cron calls `GET /api/cron/inventory` at `02:30 UTC`, or `08:00 IST`, every day. The route refreshes the Shopify SKU catalogue in Neon, retries queued Shopify stock adjustments, fetches current Shopify inventory, writes the dated snapshot to Neon, and sends the configured Resend summary email to every comma-separated address in `ALERT_EMAIL_TO`.
 
 Vercel Hobby runs daily cron jobs with hourly rather than minute-level precision, so the free plan delivers this around 8:00 AM IST. Exact-minute scheduling requires Vercel Pro or an external scheduler.
 
@@ -120,11 +126,15 @@ npm run build
 
 ## Deployment checklist
 
-1. Configure all environment variables for the Vercel Production environment.
+1. Configure all required environment variables for the Vercel Production environment. Optionally set `APP_BASE_URL` after the custom domain has a working production deployment; otherwise Vercel's production URL is used automatically.
 2. Run `npm run db:migrate` against the production Neon database.
 3. Deploy the application.
 4. Verify the domain used by `ALERT_EMAIL_FROM` in Resend and enable **Daily email summary** under Settings (existing installations only).
 5. Confirm an unauthenticated request redirects to `/login`.
 6. Sign in and verify current inventory against Shopify.
 7. Under Settings, create a warehouse test account and confirm it opens only the Warehouse desk.
-8. Confirm the next scheduled cron execution returns `200`, creates the dated snapshot, and records the email result in the snapshot run.
+8. Confirm the Shopify app version includes `write_inventory` and `read_fulfillments`, release that version, and approve the updated installation.
+9. Click **Sync Shopify now** once. Verify that the success message confirms two Shopify order automations are connected.
+10. Submit a test warehouse receipt and verify the final summary says **Synced automatically**.
+11. Fulfill a test Pack-of-N order and confirm the Neon Online balance falls by the number of individual packets; return and restock that fulfilled line and confirm it rises once.
+12. Confirm the next scheduled cron execution returns `200`, refreshes the catalogue, creates the dated snapshot, and records the email result in the snapshot run.

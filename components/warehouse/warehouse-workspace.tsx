@@ -2,9 +2,9 @@
 
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import type { WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
+import type { ShopifySyncStatus, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
-type Panel = "receive" | "product" | "activity";
+type Panel = "receive" | "dispatch" | "product" | "activity";
 type Step = "edit" | "review" | "success";
 
 interface ReceiptDraft {
@@ -26,10 +26,31 @@ interface ProductDraft {
   barcode: string;
 }
 
+interface DispatchLineDraft {
+  id: string;
+  productId: string;
+  quantity: string;
+}
+
+interface DispatchDraft {
+  warehouseLocationId: string;
+  destination: string;
+  referenceId: string;
+  notes: string;
+  lines: DispatchLineDraft[];
+}
+
 interface ReceiptSuccess {
   transactionNumber: string;
   receivedQuantity: number;
-  shopifySync: "not_required" | "pending";
+  shopifySync: ShopifySyncStatus;
+}
+
+interface RetailDispatchSuccess {
+  transactionNumber: string;
+  totalQuantity: number;
+  destination: string;
+  lines: { productId: string; productName: string; sku: string; quantity: number; closingRetailBalance: number }[];
 }
 
 const EMPTY_PRODUCT: ProductDraft = { sku: "", name: "", packSize: "", barcode: "" };
@@ -74,12 +95,15 @@ export function WarehouseWorkspace({ user, initialData }: {
   const firstLocation = initialData.locations[0]?.id ?? "";
   const [panel, setPanel] = useState<Panel>("receive");
   const [receiptStep, setReceiptStep] = useState<Step>("edit");
+  const [dispatchStep, setDispatchStep] = useState<Step>("edit");
   const [productStep, setProductStep] = useState<Step>("edit");
   const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [productError, setProductError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [receiptSuccess, setReceiptSuccess] = useState<ReceiptSuccess | null>(null);
+  const [dispatchSuccess, setDispatchSuccess] = useState<RetailDispatchSuccess | null>(null);
   const [createdProduct, setCreatedProduct] = useState<WarehouseProductOption | null>(null);
   const [receipt, setReceipt] = useState<ReceiptDraft>({
     productId: firstProduct,
@@ -93,6 +117,13 @@ export function WarehouseWorkspace({ user, initialData }: {
     damagedQuantity: "0",
   });
   const [product, setProduct] = useState<ProductDraft>(EMPTY_PRODUCT);
+  const [dispatch, setDispatch] = useState<DispatchDraft>({
+    warehouseLocationId: firstLocation,
+    destination: "",
+    referenceId: "",
+    notes: "",
+    lines: [{ id: crypto.randomUUID(), productId: firstProduct, quantity: "" }],
+  });
 
   const selectedProduct = initialData.products.find((item) => item.id === receipt.productId) ?? null;
   const selectedLocation = initialData.locations.find((item) => item.id === receipt.warehouseLocationId) ?? null;
@@ -103,11 +134,18 @@ export function WarehouseWorkspace({ user, initialData }: {
   const retailQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
   const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity - retailQuantity : 0;
   const wholeQuantities = [receivedQuantity, onlineQuantity, retailQuantity, damagedQuantity, bufferQuantity].every(Number.isSafeInteger);
+  const dispatchTotal = dispatch.lines.reduce((total, line) => total + (Number.isSafeInteger(quantity(line.quantity)) ? quantity(line.quantity) : 0), 0);
+  const dispatchLocation = initialData.locations.find((location) => location.id === dispatch.warehouseLocationId) ?? null;
 
   const activityCounts = useMemo(() => ({
     receipts: initialData.activities.filter((activity) => activity.kind === "stock_received").length,
+    dispatches: initialData.activities.filter((activity) => activity.kind === "retail_dispatched").length,
     products: initialData.activities.filter((activity) => activity.kind === "product_created").length,
   }), [initialData.activities]);
+
+  function retailAvailable(productId: string): number {
+    return initialData.retailBalances.find((balance) => balance.productId === productId && balance.warehouseLocationId === dispatch.warehouseLocationId)?.available ?? 0;
+  }
 
   function updateReceipt<K extends keyof ReceiptDraft>(key: K, value: ReceiptDraft[K]) {
     setReceipt((current) => ({ ...current, [key]: value }));
@@ -117,6 +155,25 @@ export function WarehouseWorkspace({ user, initialData }: {
   function updateProduct<K extends keyof ProductDraft>(key: K, value: ProductDraft[K]) {
     setProduct((current) => ({ ...current, [key]: value }));
     setProductError(null);
+  }
+
+  function updateDispatch<K extends keyof Omit<DispatchDraft, "lines">>(key: K, value: DispatchDraft[K]) {
+    setDispatch((current) => ({ ...current, [key]: value }));
+    setDispatchError(null);
+  }
+
+  function updateDispatchLine(id: string, key: "productId" | "quantity", value: string) {
+    setDispatch((current) => ({ ...current, lines: current.lines.map((line) => line.id === id ? { ...line, [key]: value } : line) }));
+    setDispatchError(null);
+  }
+
+  function addDispatchLine() {
+    setDispatch((current) => ({ ...current, lines: [...current.lines, { id: crypto.randomUUID(), productId: "", quantity: "" }] }));
+  }
+
+  function removeDispatchLine(id: string) {
+    setDispatch((current) => ({ ...current, lines: current.lines.length === 1 ? current.lines : current.lines.filter((line) => line.id !== id) }));
+    setDispatchError(null);
   }
 
   function reviewReceipt(event: FormEvent) {
@@ -161,6 +218,55 @@ export function WarehouseWorkspace({ user, initialData }: {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  function reviewDispatch(event: FormEvent) {
+    event.preventDefault();
+    if (!dispatch.warehouseLocationId) return setDispatchError("Select a warehouse location.");
+    if (!dispatch.destination.trim()) return setDispatchError("Enter the shop, distributor, or customer receiving this stock.");
+    if (!dispatch.referenceId.trim()) return setDispatchError("Enter the invoice, order, or dispatch reference.");
+    const seen = new Set<string>();
+    for (const line of dispatch.lines) {
+      const lineQuantity = quantity(line.quantity);
+      if (!line.productId) return setDispatchError("Select a product on every line.");
+      if (seen.has(line.productId)) return setDispatchError("The same product is listed twice. Keep one line and enter the combined quantity.");
+      if (!Number.isSafeInteger(lineQuantity) || lineQuantity <= 0) return setDispatchError("Enter a positive whole-packet quantity on every line.");
+      if (lineQuantity > retailAvailable(line.productId)) return setDispatchError(`Only ${retailAvailable(line.productId)} Retail packets are available for ${initialData.products.find((product) => product.id === line.productId)?.name ?? "this product"}.`);
+      seen.add(line.productId);
+    }
+    setDispatchError(null);
+    setIdempotencyKey(crypto.randomUUID());
+    setDispatchStep("review");
+  }
+
+  async function submitDispatch() {
+    if (!idempotencyKey) return;
+    setSubmitting(true);
+    setDispatchError(null);
+    try {
+      const response = await fetch("/api/warehouse/retail-dispatches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ ...dispatch, lines: dispatch.lines.map((line) => ({ productId: line.productId, quantity: quantity(line.quantity) })) }),
+      });
+      const body = await response.json() as { result?: RetailDispatchSuccess; error?: { message?: string } };
+      if (!response.ok || !body.result) throw new Error(body.error?.message ?? "Retail dispatch could not be submitted.");
+      setDispatchSuccess(body.result);
+      setDispatchStep("success");
+      router.refresh();
+    } catch (error) {
+      setDispatchError(error instanceof Error ? error.message : "Retail dispatch could not be submitted.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function startAnotherDispatch() {
+    setDispatch((current) => ({ ...current, destination: "", referenceId: "", notes: "", lines: [{ id: crypto.randomUUID(), productId: firstProduct, quantity: "" }] }));
+    setDispatchSuccess(null);
+    setIdempotencyKey("");
+    setDispatchError(null);
+    setDispatchStep("edit");
   }
 
   function startAnotherReceipt() {
@@ -211,6 +317,7 @@ export function WarehouseWorkspace({ user, initialData }: {
   function changePanel(next: Panel) {
     setPanel(next);
     setReceiptError(null);
+    setDispatchError(null);
     setProductError(null);
   }
 
@@ -223,11 +330,12 @@ export function WarehouseWorkspace({ user, initialData }: {
       <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-50">Choose one task below. Nothing changes until you review the summary and press the final Submit button.</p>
     </section>
 
-    <nav className="grid gap-3 sm:grid-cols-3" aria-label="Warehouse tasks">
+    <nav className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Warehouse tasks">
       {([
         ["receive", "1", "Receive stock", "Enter a new delivery"],
-        ["product", "2", "Add new product", "Create a product record"],
-        ["activity", "3", "My updates", "Check what you submitted"],
+        ["dispatch", "2", "Dispatch retail stock", "Record packets sent out"],
+        ["product", "3", "Add new product", "Create a product record"],
+        ["activity", "4", "My updates", "Check what you submitted"],
       ] as const).map(([key, number, title, subtitle]) => <button key={key} type="button" onClick={() => changePanel(key)} className={`flex min-h-20 items-center gap-3 rounded-2xl border p-4 text-left transition ${panel === key ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
         <span className={`grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold ${panel === key ? "bg-[#174f40] text-white" : "bg-slate-100 text-slate-600"}`}>{number}</span>
         <span><span className="block text-sm font-bold text-slate-900">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{subtitle}</span></span>
@@ -276,14 +384,59 @@ export function WarehouseWorkspace({ user, initialData }: {
             <SummaryRow label="Online" value={`${onlineQuantity} units`}/><SummaryRow label="Retail" value={`${retailQuantity} units`}/><SummaryRow label="Buffer" value={`${bufferQuantity} units`}/><SummaryRow label="Damaged / rejected" value={`${damagedQuantity} units`}/>
             {receipt.referenceId ? <SummaryRow label="Reference" value={receipt.referenceId}/> : null}
           </dl>
-          <p className="text-center text-xs text-slate-500">Submitting as <strong>{user.username}</strong></p>
-          <div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setReceiptStep("edit")} disabled={submitting} className="h-12 rounded-xl border border-slate-300 bg-white font-bold text-slate-700 hover:bg-slate-50">← Go back and edit</button><button type="button" onClick={submitReceipt} disabled={submitting} className="h-12 rounded-xl bg-[#174f40] font-bold text-white hover:bg-[#123f34] disabled:opacity-60">{submitting ? "Submitting…" : "Submit stock to database"}</button></div>
+          <p className="text-center text-xs text-slate-500">Submitting as <strong>{user.username}</strong>. The Online allocation will be sent to Shopify automatically.</p>
+          <div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setReceiptStep("edit")} disabled={submitting} className="h-12 rounded-xl border border-slate-300 bg-white font-bold text-slate-700 hover:bg-slate-50">← Go back and edit</button><button type="button" onClick={submitReceipt} disabled={submitting} className="h-12 rounded-xl bg-[#174f40] font-bold text-white hover:bg-[#123f34] disabled:opacity-60">{submitting ? "Saving and syncing…" : "Submit stock and sync"}</button></div>
         </div> : null}
 
         {receiptStep === "success" && receiptSuccess && selectedProduct && selectedLocation ? <div className="mx-auto max-w-2xl text-center">
           <div className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-3xl font-bold text-emerald-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">{receiptSuccess.receivedQuantity} units added</h3><p className="mt-2 text-sm text-slate-500">The inventory ledger and database were updated.</p>
-          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Online / Retail / Buffer / Damaged" value={`${onlineQuantity} / ${retailQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value="Sync queued"/> : null}</dl>
+          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Online / Retail / Buffer / Damaged" value={`${onlineQuantity} / ${retailQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "succeeded" ? <SummaryRow label="Shopify" value={<span className="text-emerald-700">Synced automatically ✓</span>}/> : null}{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value={<span className="text-amber-700">Automatic retry queued</span>}/> : null}{receiptSuccess.shopifySync === "failed" ? <SummaryRow label="Shopify" value={<span className="text-rose-700">Needs administrator attention</span>}/> : null}</dl>
           <div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={startAnotherReceipt} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Receive more stock</button></div>
+        </div> : null}
+      </div>
+    </section> : null}
+
+    {panel === "dispatch" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-blue-700">{dispatchStep === "edit" ? "Step 1 of 2 · Enter" : dispatchStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{dispatchStep === "success" ? "Retail dispatch saved" : "Dispatch retail stock"}</h2><p className="mt-1 text-sm text-slate-500">Record individual packets leaving the warehouse for offline retail orders.</p></div>
+      <div className="p-5 sm:p-7">
+        {dispatchStep === "edit" ? <form className="space-y-6" onSubmit={reviewDispatch}>
+          <ErrorMessage message={dispatchError}/>
+          <div className="grid gap-5 md:grid-cols-3">
+            <Field label="Warehouse"><select className={inputClass} value={dispatch.warehouseLocationId} onChange={(event) => updateDispatch("warehouseLocationId", event.target.value)} required><option value="">Choose warehouse</option>{initialData.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></Field>
+            <Field label="Sending to" hint="Shop, distributor, event, or customer name."><input className={inputClass} value={dispatch.destination} onChange={(event) => updateDispatch("destination", event.target.value)} placeholder="Example: Narsingi store" maxLength={200} required/></Field>
+            <Field label="Order / invoice reference"><input className={inputClass} value={dispatch.referenceId} onChange={(event) => updateDispatch("referenceId", event.target.value)} placeholder="Example: INV-1042" maxLength={100} required/></Field>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
+            <div className="flex items-center justify-between gap-4"><div><h3 className="font-bold text-slate-900">Packets being dispatched</h3><p className="mt-1 text-xs text-slate-500">Use one line for each product. Quantities are individual packets.</p></div><span className="rounded-full bg-blue-100 px-3 py-1.5 text-sm font-bold text-blue-800">Total {dispatchTotal}</span></div>
+            <div className="mt-5 space-y-3">{dispatch.lines.map((line, index) => {
+              const available = retailAvailable(line.productId);
+              return <div key={line.id} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-[2rem_minmax(0,1fr)_10rem_auto] md:items-end">
+                <span className="grid size-8 place-items-center rounded-full bg-slate-100 text-xs font-bold text-slate-600">{index + 1}</span>
+                <Field label="Product"><select className={inputClass} value={line.productId} onChange={(event) => updateDispatchLine(line.id, "productId", event.target.value)} required><option value="">Choose product</option>{initialData.products.map((product) => <option key={product.id} value={product.id}>{product.name} — {product.sku}</option>)}</select></Field>
+                <Field label="Packets" hint={line.productId ? `${available} Retail available` : "Select a product"}><input className={inputClass} type="number" inputMode="numeric" min="1" step="1" max={line.productId ? available : undefined} value={line.quantity} onChange={(event) => updateDispatchLine(line.id, "quantity", event.target.value)} placeholder="0" required/></Field>
+                <button type="button" onClick={() => removeDispatchLine(line.id)} disabled={dispatch.lines.length === 1} className="h-12 rounded-xl border border-slate-300 px-4 text-sm font-bold text-slate-600 disabled:opacity-30" aria-label={`Remove product line ${index + 1}`}>Remove</button>
+              </div>;
+            })}</div>
+            <button type="button" onClick={addDispatchLine} disabled={dispatch.lines.length >= 50} className="mt-4 rounded-xl border border-blue-300 bg-blue-50 px-4 py-2.5 text-sm font-bold text-blue-800 disabled:opacity-50">+ Add another product</button>
+          </div>
+          <Field label="Notes" hint="Optional: transporter, vehicle, or delivery instructions."><textarea className="min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-base text-slate-900 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" value={dispatch.notes} onChange={(event) => updateDispatch("notes", event.target.value)} maxLength={500}/></Field>
+          <div className="flex justify-end"><button type="submit" disabled={!initialData.products.length || !initialData.locations.length} className="h-12 rounded-xl bg-[#174f40] px-7 text-base font-bold text-white disabled:opacity-50">Review outward stock →</button></div>
+        </form> : null}
+
+        {dispatchStep === "review" && dispatchLocation ? <div className="mx-auto max-w-3xl space-y-5">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900"><strong>Please check every packet count.</strong> Submitting will reduce Retail stock immediately.</div>
+          <ErrorMessage message={dispatchError}/>
+          <dl className="rounded-2xl border border-slate-200 px-5"><SummaryRow label="Warehouse" value={dispatchLocation.name}/><SummaryRow label="Sending to" value={dispatch.destination}/><SummaryRow label="Reference" value={dispatch.referenceId}/><SummaryRow label="Total outward stock" value={`${dispatchTotal} packets`} strong/></dl>
+          <div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">SKU</th><th className="px-4 py-3 text-right">Dispatch</th><th className="px-4 py-3 text-right">Retail left</th></tr></thead><tbody>{dispatch.lines.map((line) => { const product = initialData.products.find((item) => item.id === line.productId); const amount = quantity(line.quantity); return <tr key={line.id} className="border-t border-slate-100"><td className="px-4 py-3 font-semibold text-slate-900">{product?.name}</td><td className="px-4 py-3 text-slate-500">{product?.sku}</td><td className="px-4 py-3 text-right font-bold">{amount}</td><td className="px-4 py-3 text-right text-slate-600">{retailAvailable(line.productId) - amount}</td></tr>; })}</tbody></table></div>
+          <p className="text-center text-xs text-slate-500">Submitting as <strong>{user.username}</strong></p>
+          <div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setDispatchStep("edit")} disabled={submitting} className="h-12 rounded-xl border border-slate-300 bg-white font-bold text-slate-700">← Go back and edit</button><button type="button" onClick={submitDispatch} disabled={submitting} className="h-12 rounded-xl bg-[#174f40] font-bold text-white disabled:opacity-60">{submitting ? "Saving dispatch…" : `Submit ${dispatchTotal} packets outward`}</button></div>
+        </div> : null}
+
+        {dispatchStep === "success" && dispatchSuccess ? <div className="mx-auto max-w-3xl text-center">
+          <div className="mx-auto grid size-16 place-items-center rounded-full bg-blue-100 text-3xl font-bold text-blue-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">{dispatchSuccess.totalQuantity} packets dispatched</h3><p className="mt-2 text-sm text-slate-500">Retail stock and the inventory ledger were updated.</p>
+          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Sent to" value={dispatchSuccess.destination}/><SummaryRow label="Reference" value={dispatch.referenceId}/><SummaryRow label="Transaction" value={dispatchSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/></dl>
+          <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200 text-left"><table className="w-full min-w-[620px] text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">SKU</th><th className="px-4 py-3 text-right">Sent</th><th className="px-4 py-3 text-right">Retail left</th></tr></thead><tbody>{dispatchSuccess.lines.map((line) => <tr key={line.productId} className="border-t border-slate-100"><td className="px-4 py-3 font-semibold text-slate-900">{line.productName}</td><td className="px-4 py-3 text-slate-500">{line.sku}</td><td className="px-4 py-3 text-right font-bold">{line.quantity}</td><td className="px-4 py-3 text-right">{line.closingRetailBalance}</td></tr>)}</tbody></table></div>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={startAnotherDispatch} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Create another dispatch</button></div>
         </div> : null}
       </div>
     </section> : null}
@@ -299,8 +452,8 @@ export function WarehouseWorkspace({ user, initialData }: {
 
     {panel === "activity" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><h2 className="text-xl font-bold text-slate-950">My recent updates</h2><p className="mt-1 text-sm text-slate-500">Only entries submitted under <strong>{user.username}</strong> are shown.</p></div>
-      <div className="p-5 sm:p-7"><div className="mb-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Stock receipts shown</p><p className="mt-1 text-2xl font-bold text-emerald-950">{activityCounts.receipts}</p></div><div className="rounded-xl bg-sky-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Products created shown</p><p className="mt-1 text-2xl font-bold text-sky-950">{activityCounts.products}</p></div></div>
-        {initialData.activities.length ? <div className="space-y-3">{initialData.activities.map((activity) => <article key={activity.id} className="rounded-xl border border-slate-200 p-4 sm:flex sm:items-start sm:justify-between sm:gap-5"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${activity.kind === "stock_received" ? "bg-emerald-100 text-emerald-800" : "bg-sky-100 text-sky-800"}`}>{activity.kind === "stock_received" ? "Stock received" : "Product created"}</span><span className="text-xs text-slate-400">{localDateTime(activity.occurredAt)}</span></div><h3 className="mt-2 font-bold text-slate-900">{activity.title}</h3><p className="mt-0.5 text-xs font-medium text-slate-500">{activity.reference}</p></div><div className="mt-3 flex max-w-xl flex-wrap gap-2 sm:mt-0 sm:justify-end">{activity.details.map((detail) => <span key={detail} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">{detail}</span>)}</div></article>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-14 text-center"><p className="font-bold text-slate-800">No updates yet</p><p className="mt-1 text-sm text-slate-500">Your submitted stock and products will appear here.</p><button type="button" onClick={() => changePanel("receive")} className="mt-5 rounded-xl bg-[#174f40] px-5 py-3 text-sm font-bold text-white">Receive first stock</button></div>}
+      <div className="p-5 sm:p-7"><div className="mb-5 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Stock receipts shown</p><p className="mt-1 text-2xl font-bold text-emerald-950">{activityCounts.receipts}</p></div><div className="rounded-xl bg-blue-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Retail dispatches shown</p><p className="mt-1 text-2xl font-bold text-blue-950">{activityCounts.dispatches}</p></div><div className="rounded-xl bg-sky-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Products created shown</p><p className="mt-1 text-2xl font-bold text-sky-950">{activityCounts.products}</p></div></div>
+        {initialData.activities.length ? <div className="space-y-3">{initialData.activities.map((activity) => <article key={activity.id} className="rounded-xl border border-slate-200 p-4 sm:flex sm:items-start sm:justify-between sm:gap-5"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${activity.kind === "stock_received" ? "bg-emerald-100 text-emerald-800" : activity.kind === "retail_dispatched" ? "bg-blue-100 text-blue-800" : "bg-sky-100 text-sky-800"}`}>{activity.kind === "stock_received" ? "Stock received" : activity.kind === "retail_dispatched" ? "Retail dispatched" : "Product created"}</span><span className="text-xs text-slate-400">{localDateTime(activity.occurredAt)}</span></div><h3 className="mt-2 font-bold text-slate-900">{activity.title}</h3><p className="mt-0.5 text-xs font-medium text-slate-500">{activity.reference}</p></div><div className="mt-3 flex max-w-xl flex-wrap gap-2 sm:mt-0 sm:justify-end">{activity.details.map((detail) => <span key={detail} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">{detail}</span>)}</div></article>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-14 text-center"><p className="font-bold text-slate-800">No updates yet</p><p className="mt-1 text-sm text-slate-500">Your submitted receipts, retail dispatches, and products will appear here.</p><button type="button" onClick={() => changePanel("receive")} className="mt-5 rounded-xl bg-[#174f40] px-5 py-3 text-sm font-bold text-white">Receive first stock</button></div>}
       </div>
     </section> : null}
   </div>;

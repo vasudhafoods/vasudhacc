@@ -9,12 +9,14 @@ import {
   inventoryBatches,
   inventoryTransactionLines,
   inventoryTransactions,
+  products,
   shopifyMappings,
   type InventoryBucket,
 } from "@/db/schema";
+import type { ShopifySyncStatus } from "@/types/warehouse";
 
 export class InventoryCommandError extends Error {
-  constructor(readonly code: "INVALID_TRANSFER" | "INVALID_RECEIPT" | "INSUFFICIENT_STOCK" | "MAPPING_REQUIRED" | "NOT_FOUND", message: string) {
+  constructor(readonly code: "INVALID_TRANSFER" | "INVALID_RECEIPT" | "INVALID_DISPATCH" | "INSUFFICIENT_STOCK" | "MAPPING_REQUIRED" | "NOT_FOUND", message: string) {
     super(message);
     this.name = "InventoryCommandError";
   }
@@ -44,7 +46,7 @@ export interface ReceiveStockResult {
   transactionNumber: string;
   duplicate: boolean;
   receivedQuantity: number;
-  shopifySync: "not_required" | "pending";
+  shopifySync: ShopifySyncStatus;
 }
 
 export interface TransferInventoryInput {
@@ -66,7 +68,26 @@ export interface TransferInventoryResult {
   duplicate: boolean;
   fromClosingBalance: number;
   toClosingBalance: number;
-  shopifySync: "not_required" | "pending";
+  shopifySync: ShopifySyncStatus;
+}
+
+export interface RetailDispatchInput {
+  warehouseLocationId: string;
+  lines: { productId: string; quantity: number }[];
+  destination: string;
+  referenceId: string;
+  notes?: string;
+  actorUsername: string;
+  idempotencyKey: string;
+}
+
+export interface RetailDispatchResult {
+  transactionId: string;
+  transactionNumber: string;
+  duplicate: boolean;
+  totalQuantity: number;
+  destination: string;
+  lines: { productId: string; productName: string; sku: string; quantity: number; closingRetailBalance: number }[];
 }
 
 function validateTransfer(input: TransferInventoryInput) {
@@ -94,6 +115,100 @@ function validateReceipt(input: ReceiveStockInput) {
   if (input.onlineQuantity > 0 && !input.shopifyMappingId) {
     throw new InventoryCommandError("MAPPING_REQUIRED", "A verified Shopify mapping is required when received stock is allocated Online.");
   }
+}
+
+function validateRetailDispatch(input: RetailDispatchInput) {
+  if (!input.warehouseLocationId.trim()) throw new InventoryCommandError("INVALID_DISPATCH", "Select the warehouse dispatching this stock.");
+  if (!input.destination.trim() || input.destination.trim().length > 200) throw new InventoryCommandError("INVALID_DISPATCH", "Enter a valid retail destination of 200 characters or fewer.");
+  if (!input.referenceId.trim() || input.referenceId.trim().length > 100) throw new InventoryCommandError("INVALID_DISPATCH", "Enter an invoice, order, or dispatch reference of 100 characters or fewer.");
+  if (!input.actorUsername.trim() || !input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_DISPATCH", "Actor and idempotency key are required.");
+  if (!Array.isArray(input.lines) || input.lines.length < 1 || input.lines.length > 50) throw new InventoryCommandError("INVALID_DISPATCH", "Add between 1 and 50 products to the dispatch.");
+  const productIds = new Set<string>();
+  for (const line of input.lines) {
+    if (!line.productId.trim() || !Number.isSafeInteger(line.quantity) || line.quantity <= 0) throw new InventoryCommandError("INVALID_DISPATCH", "Every dispatch line needs a product and a positive whole-packet quantity.");
+    if (productIds.has(line.productId)) throw new InventoryCommandError("INVALID_DISPATCH", "Add each product only once; update its quantity on the existing line.");
+    productIds.add(line.productId);
+  }
+  if (input.notes && input.notes.trim().length > 500) throw new InventoryCommandError("INVALID_DISPATCH", "Dispatch notes must be 500 characters or fewer.");
+}
+
+async function readRetailDispatchResult(transactionId: string, transactionNumber: string, duplicate: boolean): Promise<RetailDispatchResult> {
+  const db = getDatabase();
+  const [transaction, lines] = await Promise.all([
+    db.select({ metadata: inventoryTransactions.metadata, referenceId: inventoryTransactions.referenceId }).from(inventoryTransactions).where(eq(inventoryTransactions.id, transactionId)).limit(1),
+    db.select({ productId: inventoryTransactionLines.productId, productName: products.name, sku: products.sku, quantity: inventoryTransactionLines.quantityDelta, closingRetailBalance: inventoryTransactionLines.closingBalance })
+      .from(inventoryTransactionLines)
+      .innerJoin(products, eq(products.id, inventoryTransactionLines.productId))
+      .where(and(eq(inventoryTransactionLines.transactionId, transactionId), eq(inventoryTransactionLines.bucket, "retail"))),
+  ]);
+  const destination = typeof transaction[0]?.metadata.destination === "string" ? transaction[0].metadata.destination : "Retail destination";
+  const resultLines = lines.map((line) => ({ ...line, quantity: Math.abs(line.quantity) }));
+  return { transactionId, transactionNumber, duplicate, destination, totalQuantity: resultLines.reduce((total, line) => total + line.quantity, 0), lines: resultLines };
+}
+
+export async function dispatchRetailStock(input: RetailDispatchInput): Promise<RetailDispatchResult> {
+  validateRetailDispatch(input);
+  const db = getDatabase();
+  const existing = await db.select({ id: inventoryTransactions.id, transactionNumber: inventoryTransactions.transactionNumber, type: inventoryTransactions.type })
+    .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, input.idempotencyKey)).limit(1);
+  if (existing[0]) {
+    if (existing[0].type !== "retail_issue") throw new InventoryCommandError("INVALID_DISPATCH", "This request key belongs to a different inventory operation.");
+    return readRetailDispatchResult(existing[0].id, existing[0].transactionNumber, true);
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const orderedLines = [...input.lines].sort((left, right) => left.productId.localeCompare(right.productId));
+    const productIds = orderedLines.map((line) => line.productId);
+    const [productRows, balances] = await Promise.all([
+      tx.select({ id: products.id, name: products.name, sku: products.sku }).from(products).where(and(inArray(products.id, productIds), eq(products.active, true))),
+      tx.select().from(inventoryBalances).where(and(
+        inArray(inventoryBalances.productId, productIds),
+        eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId),
+        eq(inventoryBalances.bucket, "retail"),
+      )).orderBy(inventoryBalances.productId).for("update"),
+    ]);
+    const productById = new Map(productRows.map((product) => [product.id, product]));
+    const balanceByProduct = new Map(balances.map((balance) => [balance.productId, balance]));
+    if (productRows.length !== productIds.length) throw new InventoryCommandError("NOT_FOUND", "One or more dispatch products are missing or inactive.");
+
+    for (const line of orderedLines) {
+      const balance = balanceByProduct.get(line.productId);
+      const product = productById.get(line.productId);
+      const available = balance ? balance.onHand - balance.reserved : 0;
+      if (!balance || available < line.quantity) throw new InventoryCommandError("INSUFFICIENT_STOCK", `${product?.name ?? "This product"} has only ${available} Retail packets available.`);
+    }
+
+    const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const totalQuantity = orderedLines.reduce((total, line) => total + line.quantity, 0);
+    const [transaction] = await tx.insert(inventoryTransactions).values({
+      transactionNumber,
+      type: "retail_issue",
+      idempotencyKey: input.idempotencyKey,
+      referenceId: input.referenceId.trim(),
+      actorUsername: input.actorUsername,
+      reason: "Retail order dispatched from warehouse",
+      metadata: { destination: input.destination.trim(), notes: input.notes?.trim() || null, totalQuantity, lineCount: orderedLines.length },
+    }).returning({ id: inventoryTransactions.id });
+
+    const transactionLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
+    const responseLines: RetailDispatchResult["lines"] = [];
+    const previousValue: Record<string, number> = {};
+    const newValue: Record<string, number> = {};
+    for (const line of orderedLines) {
+      const balance = balanceByProduct.get(line.productId)!;
+      const product = productById.get(line.productId)!;
+      const closingBalance = balance.onHand - line.quantity;
+      await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+      transactionLines.push({ transactionId: transaction.id, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "retail", quantityDelta: -line.quantity, openingBalance: balance.onHand, closingBalance });
+      responseLines.push({ productId: product.id, productName: product.name, sku: product.sku, quantity: line.quantity, closingRetailBalance: closingBalance });
+      previousValue[product.id] = balance.onHand;
+      newValue[product.id] = closingBalance;
+    }
+    await tx.insert(inventoryTransactionLines).values(transactionLines);
+    await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.retail_dispatched", entityType: "inventory_transaction", entityId: transaction.id, previousValue, newValue, reason: `Retail dispatch to ${input.destination.trim()} (${input.referenceId.trim()})` });
+    return { transactionId: transaction.id, transactionNumber, duplicate: false, totalQuantity, destination: input.destination.trim(), lines: responseLines };
+  }, { isolationLevel: "serializable" });
+  return result;
 }
 
 export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise<ReceiveStockResult> {

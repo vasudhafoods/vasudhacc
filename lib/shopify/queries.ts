@@ -84,3 +84,47 @@ export const ORDERS_QUERY = `#graphql
     }
   }
 `;
+
+export const INVENTORY_ADJUST_QUANTITIES_MUTATION = `#graphql
+  mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+    inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+      inventoryAdjustmentGroup {
+        id
+        createdAt
+      }
+      userErrors {
+        code
+        field
+        message
+      }
+    }
+  }
+`;
+
+export const WEBHOOK_SUBSCRIPTIONS_QUERY = `#graphql
+  query WebhookSubscriptions($first: Int!) {
+    webhookSubscriptions(first: $first) {
+      nodes {
+        id
+        topic
+        uri
+      }
+    }
+  }
+`;
+
+export const WEBHOOK_SUBSCRIPTION_CREATE_MUTATION = `#graphql
+  mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+    webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+      webhookSubscription {
+        id
+        topic
+        uri
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;

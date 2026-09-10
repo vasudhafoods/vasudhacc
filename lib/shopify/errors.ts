@@ -12,6 +12,12 @@ export class ShopifyRateLimitError extends ShopifyError {
 export class ShopifyGraphQLError extends ShopifyError {
   constructor(message: string) { super(message, "SHOPIFY_GRAPHQL_ERROR", 502); this.name = "ShopifyGraphQLError"; }
 }
+export class ShopifyUserError extends ShopifyError {
+  constructor(message: string, readonly errorCodes: string[]) {
+    super(message, "SHOPIFY_USER_ERROR", 502);
+    this.name = "ShopifyUserError";
+  }
+}
 export class ShopifyNetworkError extends ShopifyError {
   constructor() { super("Shopify could not be reached.", "SHOPIFY_NETWORK_ERROR", 502); this.name = "ShopifyNetworkError"; }
 }
