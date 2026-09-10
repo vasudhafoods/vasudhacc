@@ -32,10 +32,26 @@ function cleanLabel(value: string | null | undefined): string | null {
   return label ? label.replace(/\b\w/g, (letter) => letter.toUpperCase()) : null;
 }
 
-export async function fetchSalesReport(days = 30): Promise<SalesReport> {
+export interface SalesReportRange { from: string; to: string }
+
+function validDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
+}
+
+function defaultRange(days: number): SalesReportRange {
   const toDate = new Date();
-  const fromDate = new Date(toDate); fromDate.setUTCDate(fromDate.getUTCDate() - Math.max(1, Math.min(days, 60)) + 1);
-  const from = fromDate.toISOString().slice(0, 10); const to = toDate.toISOString().slice(0, 10);
+  const fromDate = new Date(toDate);
+  fromDate.setUTCDate(fromDate.getUTCDate() - Math.max(1, Math.min(days, 60)) + 1);
+  return { from: fromDate.toISOString().slice(0, 10), to: toDate.toISOString().slice(0, 10) };
+}
+
+export async function fetchSalesReport(input: number | SalesReportRange = 30): Promise<SalesReport> {
+  const range = typeof input === "number" ? defaultRange(input) : input;
+  if (!validDate(range.from) || !validDate(range.to) || range.from > range.to) throw new Error("Sales reporting needs a valid date range.");
+  const from = range.from;
+  const to = range.to;
+  const toDate = new Date(`${to}T00:00:00Z`);
+  const periodDays = Math.floor((toDate.getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86_400_000) + 1;
   const orders: SalesOrder[] = [];
   let pageInfo: ShopifyPageInfo = { hasNextPage: true, endCursor: null };
   while (pageInfo.hasNextPage) {
@@ -116,5 +132,5 @@ export async function fetchSalesReport(days = 30): Promise<SalesReport> {
     sources: [...sourceMap.values()].sort((left, right) => right.revenue - left.revenue),
     campaigns: [...campaignMap.values()].sort((left, right) => right.revenue - left.revenue),
   };
-  return { from, to, currency, orders: orders.length, cancelledOrders: orders.filter((order) => order.cancelledAt).length, grossRevenue, refunds, netRevenue, averageOrderValue: orders.length ? netRevenue / orders.length : 0, projected30DayRevenue: netRevenue / Math.max(1, days) * 30, daily: [...dailyMap.values()], products: [...productMap.values()].sort((a, b) => b.units - a.units), marketing };
+  return { from, to, currency, orders: orders.length, cancelledOrders: orders.filter((order) => order.cancelledAt).length, grossRevenue, refunds, netRevenue, averageOrderValue: orders.length ? netRevenue / orders.length : 0, projected30DayRevenue: netRevenue / Math.max(1, periodDays) * 30, daily: [...dailyMap.values()], products: [...productMap.values()].sort((a, b) => b.units - a.units), marketing };
 }
