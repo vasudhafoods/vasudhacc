@@ -18,6 +18,34 @@ export interface SalesOrder {
   refunds: number;
   currency: string;
   lines: SalesLine[];
+  attribution: {
+    ready: boolean;
+    customerOrderIndex: number | null;
+    daysToConversion: number | null;
+    source: string | null;
+    medium: string | null;
+    campaign: string | null;
+  } | null;
+}
+
+export interface MarketingPerformanceRow {
+  label: string;
+  orders: number;
+  units: number;
+  revenue: number;
+}
+
+export interface MarketingAttributionReport {
+  eligibleOrders: number;
+  attributedOrders: number;
+  unattributedOrders: number;
+  attributionCoveragePercent: number;
+  newCustomerOrders: number;
+  returningCustomerOrders: number;
+  unknownCustomerTypeOrders: number;
+  averageDaysToConversion: number | null;
+  sources: MarketingPerformanceRow[];
+  campaigns: MarketingPerformanceRow[];
 }
 
 export interface SalesReport {
@@ -33,4 +61,5 @@ export interface SalesReport {
   projected30DayRevenue: number;
   daily: { date: string; orders: number; units: number; revenue: number; refunds: number }[];
   products: { productId: string | null; title: string; units: number; revenue: number }[];
+  marketing: MarketingAttributionReport;
 }

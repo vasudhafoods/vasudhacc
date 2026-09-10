@@ -3,6 +3,7 @@ import { getInventoryFeed } from "@/lib/inventory/live-data";
 import { fetchSalesReport } from "@/services/shopify-sales";
 import type { CommandCenterDecision, CommandCenterHealth, CommandCenterView } from "@/types/command-center";
 import type { SalesReport } from "@/types/sales";
+import type { InventoryFeed } from "@/lib/inventory/live-data";
 
 function healthFor(stock: number, daysCover: number | null): CommandCenterHealth {
   if (stock <= 0) return "out-of-stock";
@@ -15,7 +16,7 @@ function healthFor(stock: number, daysCover: number | null): CommandCenterHealth
 }
 
 function buildDecisions(
-  items: Awaited<ReturnType<typeof getInventoryFeed>>["items"],
+  items: InventoryFeed["items"],
   report: SalesReport | null,
 ): CommandCenterDecision[] {
   const unitsByProduct = new Map((report?.products ?? []).map((product) => [product.productId, product.units]));
@@ -46,26 +47,29 @@ function buildDecisions(
     .slice(0, 8);
 }
 
-export async function getCommandCenterView(): Promise<CommandCenterView> {
-  const [feed, salesResult] = await Promise.all([
-    getInventoryFeed(),
-    fetchSalesReport(30).then((report) => ({ report, error: null })).catch((error: unknown) => ({ report: null, error: error instanceof Error ? error.message : "Shopify orders could not be loaded." })),
-  ]);
-  const today = salesResult.report?.daily.at(-1);
+export function buildCommandCenterView(feed: InventoryFeed, report: SalesReport | null, salesError: string | null): CommandCenterView {
+  const today = report?.daily.at(-1);
   const trackedItems = feed.items.filter((item) => item.tracked !== false);
-
   return {
     capturedAt: feed.liveCapturedAt,
     mode: feed.mode === "current" ? "live" : feed.mode,
     onlineStock: feed.summary.today,
     onlineUnitsToday: today?.units ?? null,
     shopifyOrdersToday: today?.orders ?? null,
-    averageDailyOnlineUnits: salesResult.report ? Number((salesResult.report.daily.reduce((sum, day) => sum + day.units, 0) / Math.max(1, salesResult.report.daily.length)).toFixed(1)) : null,
+    averageDailyOnlineUnits: report ? Number((report.daily.reduce((sum, day) => sum + day.units, 0) / Math.max(1, report.daily.length)).toFixed(1)) : null,
     lowStockSkus: feed.summary.lowStock,
     outOfStockSkus: feed.summary.outOfStock,
     mappedSkus: trackedItems.filter((item) => Boolean(item.sku)).length,
     missingSkus: trackedItems.filter((item) => !item.sku).length,
-    decisions: buildDecisions(feed.items, salesResult.report),
-    salesError: salesResult.error,
+    decisions: buildDecisions(feed.items, report),
+    salesError,
   };
+}
+
+export async function getCommandCenterView(): Promise<CommandCenterView> {
+  const [feed, salesResult] = await Promise.all([
+    getInventoryFeed(),
+    fetchSalesReport(30).then((report) => ({ report, error: null })).catch((error: unknown) => ({ report: null, error: error instanceof Error ? error.message : "Shopify orders could not be loaded." })),
+  ]);
+  return buildCommandCenterView(feed, salesResult.report, salesResult.error);
 }

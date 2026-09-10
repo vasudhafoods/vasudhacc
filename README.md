@@ -2,6 +2,8 @@
 
 Internal Shopify inventory intelligence for Vasudha Foods. The dashboard reads current inventory from Shopify, stores daily snapshots and warehouse records in Neon PostgreSQL, and compares live stock with the two prior calendar days.
 
+The management landing page is a CEO command summary for the latest 30 days. It combines Shopify sales, order-journey/UTM attribution, warehouse channel stock, exceptions, and explainable action recommendations. **Download CEO Excel** produces a multi-sheet workbook containing the executive summary, daily sales, product performance, marketing sources and campaigns, inventory, recommendations, and identified data gaps.
+
 ## Stack
 
 - Next.js 16 App Router, React 19, strict TypeScript, and Tailwind CSS 4
@@ -84,6 +86,7 @@ Use a unique password of at least 12 characters and a cryptographically random `
 - Stock planning estimates daily depletion, days until stockout, reorder quantities, inventory/no-movement age, and dead stock from up to 60 daily snapshots. These are planning estimates, not accounting forecasts.
 - A successful scheduled snapshot sends a daily email through Resend when its credentials are configured and the email channel is enabled in Settings. New installations enable email by default; existing installations should confirm the toggle in Settings. Manual snapshots do not send duplicate alerts.
 - The Sales workspace reports 30-day orders, revenue, AOV, refunds, cancellations, best/slow products, sales-versus-stock, and a simple run-rate forecast. It requires `read_orders`; standard Shopify order access covers the most recent 60 days.
+- Shopify order journeys provide source, UTM campaign, new-versus-returning order, and days-to-conversion indicators using the existing `read_orders` scope. Paid spend, ROAS, full funnel conversion, and organic-search rankings remain explicitly unavailable until Meta/Google Ads, GA4, and Google Search Console are connected.
 
 ## Daily snapshots
 

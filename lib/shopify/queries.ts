@@ -63,6 +63,17 @@ export const ORDERS_QUERY = `#graphql
         cancelledAt
         totalPriceSet { shopMoney { amount currencyCode } }
         currentTotalPriceSet { shopMoney { amount currencyCode } }
+        customerJourneySummary {
+          ready
+          customerOrderIndex
+          daysToConversion
+          lastVisit {
+            source
+            sourceDescription
+            sourceType
+            utmParameters { source medium campaign content term }
+          }
+        }
         refunds {
           processedAt
           totalRefundedSet { shopMoney { amount currencyCode } }
