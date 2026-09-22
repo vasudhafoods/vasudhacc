@@ -156,6 +156,12 @@ function validateReceipt(input: ReceiveStockInput) {
   if (input.onlineQuantity + input.retailQuantity + input.bufferQuantity + input.damagedQuantity !== input.receivedQuantity) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Shopify, Buffer and Damaged allocation must equal the received quantity.");
   }
+  const usableQuantity = input.receivedQuantity - input.damagedQuantity;
+  const expectedOnlineQuantity = Math.round(usableQuantity * 0.7);
+  const expectedBufferQuantity = usableQuantity - expectedOnlineQuantity;
+  if (input.onlineQuantity !== expectedOnlineQuantity || input.bufferQuantity !== expectedBufferQuantity) {
+    throw new InventoryCommandError("INVALID_RECEIPT", `Usable stock must be allocated automatically: ${expectedOnlineQuantity} packets to Shopify and ${expectedBufferQuantity} packets to Buffer.`);
+  }
   if (!input.batchNumber.trim() || !input.source.trim() || !input.reason.trim() || !input.actorUsername.trim() || !input.idempotencyKey.trim()) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Batch, source, reason, actor and idempotency key are required.");
   }

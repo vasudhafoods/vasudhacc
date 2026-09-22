@@ -61,7 +61,7 @@ Warehouse staff are restricted to the Warehouse desk. They can receive and alloc
 
 Stock receipts are written through the transactional inventory ledger, including immutable transaction lines and an audit event. Product creation is also audited. A product created by warehouse staff must be linked through Shopify catalogue synchronization before its first automatically allocated receipt.
 
-Warehouse receipts use individual packets as the physical base unit. Staff enter the Buffer quantity, and all remaining usable packets are allocated to Shopify. New receipts cannot allocate packets to Retail. Synced Pack-of-3/Pack-of-5/Pack-of-10 Shopify variants are excluded from physical receiving so the same packet pool is not counted multiple times.
+Warehouse receipts use individual packets as the physical base unit. After damaged units are removed, the screen automatically allocates 70% to Shopify and the integer remainder to Buffer. New receipts cannot allocate packets to Retail. Synced Pack-of-3/Pack-of-5/Pack-of-10 Shopify variants are excluded from physical receiving so the same packet pool is not counted multiple times.
 
 The Online allocation is sent to the mapped Shopify Pack-of-1 inventory item immediately after the Neon transaction commits. Delivery uses Shopify's idempotent inventory-adjustment mutation, so retries cannot add the same receipt twice. If Shopify is temporarily unavailable, the update stays in the Neon outbox and is retried by the daily scheduled job or the next manual **Sync Shopify now** action.
 

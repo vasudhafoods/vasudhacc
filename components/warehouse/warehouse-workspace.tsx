@@ -17,7 +17,6 @@ interface ReceiptDraft {
   expiryDate: string;
   receivedQuantity: string;
   damagedQuantity: string;
-  bufferQuantity: string;
 }
 
 interface ProductDraft {
@@ -167,7 +166,6 @@ export function WarehouseWorkspace({ user, initialData }: {
     expiryDate: "",
     receivedQuantity: "",
     damagedQuantity: "0",
-    bufferQuantity: "0",
   });
   const [product, setProduct] = useState<ProductDraft>(EMPTY_PRODUCT);
   const [dispatch, setDispatch] = useState<DispatchDraft>({
@@ -183,8 +181,8 @@ export function WarehouseWorkspace({ user, initialData }: {
   const receivedQuantity = quantity(receipt.receivedQuantity);
   const damagedQuantity = quantity(receipt.damagedQuantity);
   const usableQuantity = receivedQuantity - damagedQuantity;
-  const bufferQuantity = quantity(receipt.bufferQuantity);
-  const onlineQuantity = usableQuantity - bufferQuantity;
+  const onlineQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.7) : 0;
+  const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity : 0;
   const retailQuantity = 0;
   const wholeQuantities = [receivedQuantity, onlineQuantity, retailQuantity, damagedQuantity, bufferQuantity].every(Number.isSafeInteger);
   const dispatchTotal = dispatch.lines.reduce((total, line) => total + (Number.isSafeInteger(quantity(line.quantity)) ? quantity(line.quantity) : 0), 0);
@@ -236,7 +234,6 @@ export function WarehouseWorkspace({ user, initialData }: {
     if (!receipt.batchNumber.trim()) return setReceiptError("Enter the batch number printed on the stock.");
     if (!wholeQuantities || receivedQuantity <= 0 || damagedQuantity < 0) return setReceiptError("Total received and damaged stock must be non-negative whole numbers, and total received must be greater than zero.");
     if (damagedQuantity > receivedQuantity) return setReceiptError("Damaged stock cannot be greater than the total received.");
-    if (bufferQuantity < 0 || bufferQuantity > usableQuantity) return setReceiptError("Buffer stock must be between zero and the usable stock received.");
     if (onlineQuantity > 0 && !selectedProduct.shopifyMappingId) return setReceiptError("This product must be linked to Shopify before the automatic Online allocation can be submitted. Ask an administrator to synchronize the catalogue.");
     if (receipt.manufacturingDate && receipt.expiryDate && receipt.expiryDate < receipt.manufacturingDate) return setReceiptError("Expiry date cannot be before the manufacturing date.");
     setReceiptError(null);
@@ -332,7 +329,6 @@ export function WarehouseWorkspace({ user, initialData }: {
       expiryDate: "",
       receivedQuantity: "",
       damagedQuantity: "0",
-      bufferQuantity: "0",
     }));
     setReceiptSuccess(null);
     setIdempotencyKey("");
@@ -411,11 +407,11 @@ export function WarehouseWorkspace({ user, initialData }: {
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
             <h3 className="font-bold text-slate-900">Shopify and buffer allocation</h3>
-            <p className="mt-1 text-sm text-slate-500">Set aside the buffer packets. All remaining usable packets go to Shopify.</p>
+            <p className="mt-1 text-sm text-slate-500">Usable stock is allocated automatically: 70% to Shopify and the remaining 30% to Buffer.</p>
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
               <Field label="Damaged / rejected"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.damagedQuantity} onChange={(event) => updateReceipt("damagedQuantity", event.target.value)}/></Field>
-              <Field label="Buffer packets"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" max={Math.max(0, usableQuantity)} value={receipt.bufferQuantity} onChange={(event) => updateReceipt("bufferQuantity", event.target.value)}/></Field>
-              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Shopify</p><p className="mt-2 text-3xl font-bold text-emerald-800">{Math.max(0, onlineQuantity)}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Shopify · 70%</p><p className="mt-2 text-3xl font-bold text-emerald-800">{onlineQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-amber-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Buffer · 30%</p><p className="mt-2 text-3xl font-bold text-amber-800">{bufferQuantity}</p><p className="mt-1 text-xs text-slate-500">Protected packets</p></div>
             </div>
           </div>
 
