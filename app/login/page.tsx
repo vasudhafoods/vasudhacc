@@ -33,7 +33,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 
         <section className={`border-t border-slate-200 bg-slate-50/70 p-6 sm:p-8 md:border-l md:border-t-0 ${portal === "warehouse" && error ? "bg-rose-50/30" : ""}`} aria-labelledby="warehouse-login-title">
           <div className="flex items-center gap-3"><div className="grid size-11 place-items-center rounded-xl bg-[#dcece5] text-sm font-bold text-[#174f40]">O</div><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Operations</p><h2 id="warehouse-login-title" className="text-xl font-bold text-slate-950">Warehouse & Sales Login</h2></div></div>
-          <p className="mt-4 min-h-10 text-sm leading-6 text-slate-500">Warehouse users manage stock. Retail Sales users can enter offline sales, collections, and pending payment updates.</p>
+          <p className="mt-4 min-h-10 text-sm leading-6 text-slate-500">Warehouse users manage stock. Sales users can review Shopify orders.</p>
           <LoginForm portal="warehouse"/>
         </section>
       </div>

@@ -137,6 +137,7 @@ export interface DisposeInventoryResult {
 
 function validateTransfer(input: TransferInventoryInput) {
   if (input.fromBucket === input.toBucket) throw new InventoryCommandError("INVALID_TRANSFER", "Source and destination buckets must differ.");
+  if (input.toBucket === "retail") throw new InventoryCommandError("INVALID_TRANSFER", "New stock cannot be allocated to Retail.");
   if (input.fromBucket === "online") throw new InventoryCommandError("INVALID_TRANSFER", "Moving stock out of Online is disabled until Shopify committed inventory is synchronized.");
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new InventoryCommandError("INVALID_TRANSFER", "Quantity must be a positive whole number.");
   if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_TRANSFER", "A valid idempotency key is required.");
@@ -151,8 +152,9 @@ function validateReceipt(input: ReceiveStockInput) {
   if (quantities.some((quantity) => !Number.isSafeInteger(quantity) || quantity < 0) || input.receivedQuantity <= 0) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Receipt quantities must be non-negative whole numbers and received quantity must be positive.");
   }
+  if (input.retailQuantity !== 0) throw new InventoryCommandError("INVALID_RECEIPT", "New stock can only be allocated to Shopify and Buffer.");
   if (input.onlineQuantity + input.retailQuantity + input.bufferQuantity + input.damagedQuantity !== input.receivedQuantity) {
-    throw new InventoryCommandError("INVALID_RECEIPT", "Online, Retail, Buffer and Damaged allocation must equal the received quantity.");
+    throw new InventoryCommandError("INVALID_RECEIPT", "Shopify, Buffer and Damaged allocation must equal the received quantity.");
   }
   if (!input.batchNumber.trim() || !input.source.trim() || !input.reason.trim() || !input.actorUsername.trim() || !input.idempotencyKey.trim()) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Batch, source, reason, actor and idempotency key are required.");
@@ -417,7 +419,7 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
     }
 
     const allocation = new Map<InventoryBucket, number>([
-      ["online", input.onlineQuantity], ["retail", input.retailQuantity], ["buffer", input.bufferQuantity], ["damaged", input.damagedQuantity],
+      ["online", input.onlineQuantity], ["buffer", input.bufferQuantity], ["damaged", input.damagedQuantity],
     ]);
     const buckets = [...allocation.entries()].filter(([, quantity]) => quantity > 0).map(([bucket]) => bucket);
     await tx.insert(inventoryBalances).values(buckets.map((bucket) => ({ productId: input.productId, warehouseLocationId: input.warehouseLocationId, bucket })))

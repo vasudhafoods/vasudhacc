@@ -1,0 +1,30 @@
+{
+  "reportDate": "2026-09-19",
+  "source": "5_6167915831280804297.pdf",
+  "skuSource": "Matched by product name against Neon Shopify mappings; the PDF has no SKU column",
+  "unit": "individual packets",
+  "closingTotal": 7249,
+  "items": [
+    { "name": "NAVAGRAIN Cookies", "sku": "F0007-1", "closing": 693 },
+    { "name": "LITTLE Millet Cookies", "sku": "F0008-1", "closing": 756 },
+    { "name": "FOXTAIL Cookies", "sku": "F0010-1", "closing": 759 },
+    { "name": "WHEAT Fiber Cookies", "sku": "VMC001", "closing": 688 },
+    { "name": "Chikkies Peanut", "sku": null, "closing": 0 },
+    { "name": "Chikkies Millet", "sku": null, "closing": 0 },
+    { "name": "Foxtail Millet Noodles", "sku": "F0002-1", "closing": 326 },
+    { "name": "Little Millet Noodles", "sku": "F0001-1", "closing": 656 },
+    { "name": "Kodo Millet Noodles", "sku": "671253175371", "closing": 728 },
+    { "name": "Sorghum Millet Noodles", "sku": "F0006-1", "closing": 714 },
+    { "name": "Finger Millet Noodles", "sku": "F0005-1", "closing": 471 },
+    { "name": "Poha", "sku": "F0019-1", "closing": 117 },
+    { "name": "Lemon Rice", "sku": "F0027-1", "closing": 154 },
+    { "name": "Idly Sambar", "sku": "F0020-1", "closing": 154 },
+    { "name": "Gajar Halwa", "sku": "F0024-1", "closing": 276 },
+    { "name": "Dal Khichidi", "sku": "FOO22-1", "closing": 74 },
+    { "name": "Dudhi Halwa", "sku": "F0026-1", "closing": 267 },
+    { "name": "Aloo Jeera", "sku": "F0029-1", "closing": 15 },
+    { "name": "Moong Dal Halwa", "sku": "F0028-1", "closing": 197 },
+    { "name": "Pulliyogare Rice", "sku": "F0030-1", "closing": 42 },
+    { "name": "Upma", "sku": "F0025-1", "closing": 162 }
+  ]
+}

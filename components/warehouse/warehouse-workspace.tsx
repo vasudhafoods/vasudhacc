@@ -17,6 +17,7 @@ interface ReceiptDraft {
   expiryDate: string;
   receivedQuantity: string;
   damagedQuantity: string;
+  bufferQuantity: string;
 }
 
 interface ProductDraft {
@@ -166,6 +167,7 @@ export function WarehouseWorkspace({ user, initialData }: {
     expiryDate: "",
     receivedQuantity: "",
     damagedQuantity: "0",
+    bufferQuantity: "0",
   });
   const [product, setProduct] = useState<ProductDraft>(EMPTY_PRODUCT);
   const [dispatch, setDispatch] = useState<DispatchDraft>({
@@ -181,9 +183,9 @@ export function WarehouseWorkspace({ user, initialData }: {
   const receivedQuantity = quantity(receipt.receivedQuantity);
   const damagedQuantity = quantity(receipt.damagedQuantity);
   const usableQuantity = receivedQuantity - damagedQuantity;
-  const onlineQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
-  const retailQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
-  const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity - retailQuantity : 0;
+  const bufferQuantity = quantity(receipt.bufferQuantity);
+  const onlineQuantity = usableQuantity - bufferQuantity;
+  const retailQuantity = 0;
   const wholeQuantities = [receivedQuantity, onlineQuantity, retailQuantity, damagedQuantity, bufferQuantity].every(Number.isSafeInteger);
   const dispatchTotal = dispatch.lines.reduce((total, line) => total + (Number.isSafeInteger(quantity(line.quantity)) ? quantity(line.quantity) : 0), 0);
   const dispatchLocation = initialData.locations.find((location) => location.id === dispatch.warehouseLocationId) ?? null;
@@ -234,6 +236,7 @@ export function WarehouseWorkspace({ user, initialData }: {
     if (!receipt.batchNumber.trim()) return setReceiptError("Enter the batch number printed on the stock.");
     if (!wholeQuantities || receivedQuantity <= 0 || damagedQuantity < 0) return setReceiptError("Total received and damaged stock must be non-negative whole numbers, and total received must be greater than zero.");
     if (damagedQuantity > receivedQuantity) return setReceiptError("Damaged stock cannot be greater than the total received.");
+    if (bufferQuantity < 0 || bufferQuantity > usableQuantity) return setReceiptError("Buffer stock must be between zero and the usable stock received.");
     if (onlineQuantity > 0 && !selectedProduct.shopifyMappingId) return setReceiptError("This product must be linked to Shopify before the automatic Online allocation can be submitted. Ask an administrator to synchronize the catalogue.");
     if (receipt.manufacturingDate && receipt.expiryDate && receipt.expiryDate < receipt.manufacturingDate) return setReceiptError("Expiry date cannot be before the manufacturing date.");
     setReceiptError(null);
@@ -329,6 +332,7 @@ export function WarehouseWorkspace({ user, initialData }: {
       expiryDate: "",
       receivedQuantity: "",
       damagedQuantity: "0",
+      bufferQuantity: "0",
     }));
     setReceiptSuccess(null);
     setIdempotencyKey("");
@@ -384,9 +388,8 @@ export function WarehouseWorkspace({ user, initialData }: {
     <nav className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Warehouse tasks">
       {([
         ["receive", "1", "Receive stock", "Enter a new delivery"],
-        ["dispatch", "2", "Dispatch retail stock", "Record packets sent out"],
-        ["product", "3", "Add new product", "Create a product record"],
-        ["activity", "4", "My updates", "Check what you submitted"],
+        ["product", "2", "Add new product", "Create a product record"],
+        ["activity", "3", "My updates", "Check what you submitted"],
       ] as const).map(([key, number, title, subtitle]) => <button key={key} type="button" onClick={() => changePanel(key)} className={`flex min-h-20 items-center gap-3 rounded-2xl border p-4 text-left transition ${panel === key ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
         <span className={`grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold ${panel === key ? "bg-[#174f40] text-white" : "bg-slate-100 text-slate-600"}`}>{number}</span>
         <span><span className="block text-sm font-bold text-slate-900">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{subtitle}</span></span>
@@ -407,13 +410,12 @@ export function WarehouseWorkspace({ user, initialData }: {
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-            <h3 className="font-bold text-slate-900">Automatic stock allocation</h3>
-            <p className="mt-1 text-sm text-slate-500">Enter damaged or rejected packets only. Usable stock is divided automatically: 40% Online, 40% Retail, and the remaining packets to Buffer.</p>
-            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <h3 className="font-bold text-slate-900">Shopify and buffer allocation</h3>
+            <p className="mt-1 text-sm text-slate-500">Set aside the buffer packets. All remaining usable packets go to Shopify.</p>
+            <div className="mt-5 grid gap-4 sm:grid-cols-3">
               <Field label="Damaged / rejected"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.damagedQuantity} onChange={(event) => updateReceipt("damagedQuantity", event.target.value)}/></Field>
-              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Online · 40%</p><p className="mt-2 text-3xl font-bold text-emerald-800">{onlineQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
-              <div className="rounded-xl border border-blue-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Retail · 40%</p><p className="mt-2 text-3xl font-bold text-blue-800">{retailQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
-              <div className="rounded-xl border border-amber-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Buffer · remainder</p><p className="mt-2 text-3xl font-bold text-amber-800">{bufferQuantity}</p><p className="mt-1 text-xs text-slate-500">Protected packets</p></div>
+              <Field label="Buffer packets"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" max={Math.max(0, usableQuantity)} value={receipt.bufferQuantity} onChange={(event) => updateReceipt("bufferQuantity", event.target.value)}/></Field>
+              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Shopify</p><p className="mt-2 text-3xl font-bold text-emerald-800">{Math.max(0, onlineQuantity)}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
             </div>
           </div>
 
@@ -432,7 +434,7 @@ export function WarehouseWorkspace({ user, initialData }: {
           <dl className="rounded-2xl border border-slate-200 px-5">
             <SummaryRow label="Product" value={<>{selectedProduct.name}<span className="block text-xs font-normal text-slate-500">{selectedProduct.sku}</span></>}/>
             <SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Total received" value={`${receivedQuantity} units`} strong/>
-            <SummaryRow label="Online" value={`${onlineQuantity} units`}/><SummaryRow label="Retail" value={`${retailQuantity} units`}/><SummaryRow label="Buffer" value={`${bufferQuantity} units`}/><SummaryRow label="Damaged / rejected" value={`${damagedQuantity} units`}/>
+            <SummaryRow label="Shopify" value={`${onlineQuantity} units`}/><SummaryRow label="Buffer" value={`${bufferQuantity} units`}/><SummaryRow label="Damaged / rejected" value={`${damagedQuantity} units`}/>
             {receipt.referenceId ? <SummaryRow label="Reference" value={receipt.referenceId}/> : null}
           </dl>
           <p className="text-center text-xs text-slate-500">Submitting as <strong>{user.username}</strong>. The Online allocation will be sent to Shopify automatically.</p>
@@ -441,7 +443,7 @@ export function WarehouseWorkspace({ user, initialData }: {
 
         {receiptStep === "success" && receiptSuccess && selectedProduct && selectedLocation ? <div className="mx-auto max-w-2xl text-center">
           <div className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-3xl font-bold text-emerald-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">{receiptSuccess.receivedQuantity} units added</h3><p className="mt-2 text-sm text-slate-500">The inventory ledger and database were updated.</p>
-          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Online / Retail / Buffer / Damaged" value={`${onlineQuantity} / ${retailQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "succeeded" ? <SummaryRow label="Shopify" value={<span className="text-emerald-700">Synced automatically ✓</span>}/> : null}{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value={<span className="text-amber-700">Automatic retry queued</span>}/> : null}{receiptSuccess.shopifySync === "failed" ? <SummaryRow label="Shopify" value={<span className="text-rose-700">Needs administrator attention</span>}/> : null}</dl>
+          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Shopify / Buffer / Damaged" value={`${onlineQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "succeeded" ? <SummaryRow label="Shopify" value={<span className="text-emerald-700">Synced automatically ✓</span>}/> : null}{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value={<span className="text-amber-700">Automatic retry queued</span>}/> : null}{receiptSuccess.shopifySync === "failed" ? <SummaryRow label="Shopify" value={<span className="text-rose-700">Needs administrator attention</span>}/> : null}</dl>
           <div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={startAnotherReceipt} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Receive more stock</button></div>
         </div> : null}
       </div>

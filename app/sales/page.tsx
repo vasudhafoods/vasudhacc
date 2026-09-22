@@ -1,40 +1,27 @@
 import { connection } from "next/server";
-import { OfflineSalesWorkspace } from "@/components/sales/offline-sales-workspace";
 import { requireSalesSession } from "@/lib/auth/authorization";
 import { getInventoryFeed } from "@/lib/inventory/live-data";
 import { resolveSalesDateRange } from "@/lib/sales/date-range";
-import { getOfflineSalesOverview } from "@/services/offline-sales";
 import { fetchSalesReport } from "@/services/shopify-sales";
-import type { OfflineSalesOverview } from "@/types/offline-sales";
 import type { SalesReport } from "@/types/sales";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
 const money = (value: number, currency: string) => new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
-const paisa = (value: number) => money(value / 100, "INR");
-
 type MaybeReport = { report: SalesReport | null; error: string | null };
-type MaybeOffline = { data: OfflineSalesOverview | null; error: string | null };
 
 async function readShopifySales(range: { from: string; to: string }): Promise<MaybeReport> {
   try { return { report: await fetchSalesReport(range), error: null }; }
   catch (error) { return { report: null, error: error instanceof Error ? error.message : "Shopify orders could not be loaded." }; }
 }
 
-async function readOfflineSales(range: { from: string; to: string }): Promise<MaybeOffline> {
-  try { return { data: await getOfflineSalesOverview(range), error: null }; }
-  catch (error) { return { data: null, error: error instanceof Error ? error.message : "Offline sales could not be loaded." }; }
-}
-
 async function loadSales(current: { from: string; to: string }, previous: { from: string; to: string }) {
-  const [report, prior, inventory, offline, previousOffline] = await Promise.all([
+  const [report, prior, inventory] = await Promise.all([
     readShopifySales(current),
     readShopifySales(previous),
     getInventoryFeed().then((value) => ({ value, error: null as string | null })).catch((error: unknown) => ({ value: null, error: error instanceof Error ? error.message : "Inventory could not be loaded." })),
-    readOfflineSales(current),
-    readOfflineSales(previous),
   ]);
-  return { report, prior, inventory, offline, previousOffline };
+  return { report, prior, inventory };
 }
 
 function totalUnits(report: SalesReport): number {
@@ -47,20 +34,14 @@ function change(current: number, previous: number): number | null {
 }
 
 export default async function SalesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const session = await requireSalesSession();
+  await requireSalesSession();
   await connection();
   const range = resolveSalesDateRange(await searchParams);
   const result = await loadSales(range.current, range.previous);
   const report = result.report.report;
   const previous = result.prior.report;
-  const offline = result.offline.data;
-  const previousOffline = result.previousOffline.data;
   const onlineRevenue = report?.netRevenue ?? 0;
   const previousOnlineRevenue = previous?.netRevenue ?? 0;
-  const offlineRevenue = offline?.salesAmountPaisa ?? 0;
-  const previousOfflineRevenue = previousOffline?.salesAmountPaisa ?? 0;
-  const combinedRevenue = onlineRevenue + offlineRevenue / 100;
-  const previousCombinedRevenue = previousOnlineRevenue + previousOfflineRevenue / 100;
 
   const stockByProduct = new Map<string, number>();
   if (result.inventory.value) for (const item of result.inventory.value.items) stockByProduct.set(item.productId, (stockByProduct.get(item.productId) ?? 0) + item.today);
@@ -71,24 +52,17 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const previousCancellationRate = previous?.orders ? previous.cancelledOrders / previous.orders * 100 : 0;
 
   return <div className="space-y-6">
-    <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div><p className="text-xs font-medium text-[#2d725f]">Commerce intelligence</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Sales analytics</h1><p className="mt-1 text-sm text-slate-500">Online Shopify and offline retail sales for {range.label}, compared with {range.previousLabel}.</p></div><DateFilter range={range}/></div>
+    <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div><p className="text-xs font-medium text-[#2d725f]">Commerce intelligence</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Sales analytics</h1><p className="mt-1 text-sm text-slate-500">Shopify sales for {range.label}, compared with {range.previousLabel}.</p></div><DateFilter range={range}/></div>
 
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      <Metric label="Online sales" value={report ? money(onlineRevenue, report.currency) : "Unavailable"} previous={previous ? money(previousOnlineRevenue, previous.currency) : "—"} change={report && previous ? change(onlineRevenue, previousOnlineRevenue) : null}/>
-      <Metric label="Offline invoiced sales" value={offline ? paisa(offlineRevenue) : "Unavailable"} previous={previousOffline ? paisa(previousOfflineRevenue) : "—"} change={offline && previousOffline ? change(offlineRevenue, previousOfflineRevenue) : null}/>
-      <Metric label="Combined sales" value={money(combinedRevenue, report?.currency ?? "INR")} previous={money(previousCombinedRevenue, previous?.currency ?? "INR")} change={report && previous && offline && previousOffline ? change(combinedRevenue, previousCombinedRevenue) : null}/>
-      <Metric label="Offline collections" value={offline ? paisa(offline.collectedAmountPaisa) : "Unavailable"} previous={previousOffline ? paisa(previousOffline.collectedAmountPaisa) : "—"} change={offline && previousOffline ? change(offline.collectedAmountPaisa, previousOffline.collectedAmountPaisa) : null}/>
-      <Metric label="Open offline receivables" value={offline ? paisa(offline.openReceivablesPaisa) : "Unavailable"} previous="All unpaid invoices" change={null} inverse/>
-      <Metric label="New B2B customers" value={offline?.newB2bCustomers ?? "—"} previous={previousOffline?.newB2bCustomers ?? "—"} change={offline && previousOffline ? change(offline.newB2bCustomers, previousOffline.newB2bCustomers) : null}/>
+      <Metric label="Shopify sales" value={report ? money(onlineRevenue, report.currency) : "Unavailable"} previous={previous ? money(previousOnlineRevenue, previous.currency) : "—"} change={report && previous ? change(onlineRevenue, previousOnlineRevenue) : null}/>
     </section>
-
-    {offline ? <OfflineSalesWorkspace overview={offline} role={session.role}/> : <div className="rounded-xl border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-amber-950">Offline sales is not ready yet</p><p className="mt-1 text-sm text-amber-900">{result.offline.error ?? "Run the database migration to create the offline sales ledger."}</p></div>}
 
     {report && previous ? <>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><Metric label="Shopify orders" value={report.orders} previous={previous.orders} change={change(report.orders, previous.orders)}/><Metric label="Shopify items sold" value={currentUnits} previous={previousUnits} change={change(currentUnits, previousUnits)}/><Metric label="Average online order value" value={money(report.averageOrderValue, report.currency)} previous={money(previous.averageOrderValue, previous.currency)} change={change(report.averageOrderValue, previous.averageOrderValue)}/><Metric label="Shopify refunds" value={money(report.refunds, report.currency)} previous={money(previous.refunds, previous.currency)} change={change(report.refunds, previous.refunds)} inverse/><Metric label="Cancellation rate" value={`${cancellationRate.toFixed(1)}%`} previous={`${previousCancellationRate.toFixed(1)}%`} change={change(cancellationRate, previousCancellationRate)} inverse/></section>
       <section className="grid gap-5 xl:grid-cols-2"><ProductTable title="Best-selling online products" products={report.products.slice(0, 10)} stock={stockByProduct} previousProducts={previousProducts} currency={report.currency}/><ProductTable title="Slow-moving online products" products={[...report.products].sort((left, right) => left.units - right.units).slice(0, 10)} stock={stockByProduct} previousProducts={previousProducts} currency={report.currency}/></section>
       <DailyTable report={report} previous={previous}/>
-    </> : <div className="rounded-xl border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-amber-950">Shopify online sales are unavailable</p><p className="mt-1 text-sm text-amber-900">{result.report.error ?? "Release a Shopify app version with read_orders, then approve the updated access."} Offline sales and collections remain available above.</p></div>}
+    </> : <div className="rounded-xl border border-amber-200 bg-amber-50 p-5"><p className="font-semibold text-amber-950">Shopify online sales are unavailable</p><p className="mt-1 text-sm text-amber-900">{result.report.error ?? "Release a Shopify app version with read_orders, then approve the updated access."}</p></div>}
   </div>;
 }
 
