@@ -17,6 +17,8 @@ export async function POST(request: Request) {
       sku: String(body.sku ?? ""),
       name: String(body.name ?? ""),
       packSize: body.packSize ? String(body.packSize) : undefined,
+      category: body.category === "noodles" || body.category === "cookies" || body.category === "rte" ? body.category : "other",
+      unitPricePaisa: Number(body.unitPricePaisa ?? 0),
       barcode: body.barcode ? String(body.barcode) : undefined,
     }, session.username);
     return Response.json({ ok: true, product }, { status: 201, headers: { "Cache-Control": "private, no-store" } });

@@ -5,14 +5,18 @@ import { getDatabase } from "@/db/client";
 import { integrationOutbox } from "@/db/schema";
 import { shopifyGraphQL } from "@/lib/shopify/client";
 import { ShopifyGraphQLError, ShopifyUserError } from "@/lib/shopify/errors";
-import { INVENTORY_ADJUST_QUANTITIES_MUTATION } from "@/lib/shopify/queries";
+import { INVENTORY_ADJUST_QUANTITIES_MUTATION, INVENTORY_SET_QUANTITIES_MUTATION } from "@/lib/shopify/queries";
 import type { ShopifySyncStatus } from "@/types/warehouse";
 
 const PROCESSING_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_BATCH_SIZE = 50;
 
 interface InventoryAdjustmentResponse {
-  inventoryAdjustQuantities: {
+  inventoryAdjustQuantities?: {
+    inventoryAdjustmentGroup: { id: string; createdAt: string } | null;
+    userErrors: { code?: string; field?: string[]; message: string }[];
+  };
+  inventorySetQuantities: {
     inventoryAdjustmentGroup: { id: string; createdAt: string } | null;
     userErrors: { code?: string; field?: string[]; message: string }[];
   };
@@ -47,14 +51,23 @@ function payloadString(payload: Record<string, unknown>, key: string, prefix: st
   return value;
 }
 
-function adjustmentPayload(payload: Record<string, unknown>) {
-  const quantityDelta = payload.quantityDelta;
-  if (!Number.isSafeInteger(quantityDelta) || Number(quantityDelta) === 0) throw new Error("Outbox payload has an invalid quantityDelta.");
+function inventoryPayload(payload: Record<string, unknown>) {
   return {
     inventoryItemId: payloadString(payload, "shopifyInventoryItemId", "gid://shopify/InventoryItem/"),
     locationId: payloadString(payload, "shopifyLocationId", "gid://shopify/Location/"),
-    quantityDelta: Number(quantityDelta),
   };
+}
+
+function setQuantityPayload(payload: Record<string, unknown>) {
+  const quantity = payload.quantity;
+  if (!Number.isSafeInteger(quantity) || Number(quantity) < 0) throw new Error("Outbox payload has an invalid quantity.");
+  return { ...inventoryPayload(payload), quantity: Number(quantity) };
+}
+
+function adjustmentPayload(payload: Record<string, unknown>) {
+  const quantityDelta = payload.quantityDelta;
+  if (!Number.isSafeInteger(quantityDelta) || Number(quantityDelta) === 0) throw new Error("Outbox payload has an invalid quantityDelta.");
+  return { ...inventoryPayload(payload), quantityDelta: Number(quantityDelta) };
 }
 
 function remoteIdempotencyKey(jobId: string, payload: Record<string, unknown>): string {
@@ -67,8 +80,29 @@ function shouldRotateRemoteKey(error: unknown): boolean {
   return !error.errorCodes.includes("IDEMPOTENCY_CONCURRENT_REQUEST");
 }
 
-async function executeAdjustment(job: typeof integrationOutbox.$inferSelect): Promise<void> {
+async function executeSetQuantity(job: typeof integrationOutbox.$inferSelect): Promise<void> {
   if (job.operation !== "shopify_inventory_adjust") throw new Error(`Unsupported outbox operation: ${job.operation}.`);
+  const quantity = setQuantityPayload(job.payload);
+  const response = await shopifyGraphQL<InventoryAdjustmentResponse>(INVENTORY_SET_QUANTITIES_MUTATION, {
+    input: {
+      reason: "correction",
+      ignoreCompareQuantity: true,
+      referenceDocumentUri: `gid://vasudha-command-center/InventoryTransaction/${job.transactionId}`,
+      quantities: [{
+        quantity: quantity.quantity,
+        inventoryItemId: quantity.inventoryItemId,
+        locationId: quantity.locationId,
+        name: "available",
+      }],
+    },
+    idempotencyKey: remoteIdempotencyKey(job.id, job.payload),
+  });
+  if (!response.inventorySetQuantities.inventoryAdjustmentGroup) {
+    throw new ShopifyGraphQLError("Shopify did not confirm the inventory quantity update.");
+  }
+}
+
+async function executeAdjustment(job: typeof integrationOutbox.$inferSelect): Promise<void> {
   const adjustment = adjustmentPayload(job.payload);
   const response = await shopifyGraphQL<InventoryAdjustmentResponse>(INVENTORY_ADJUST_QUANTITIES_MUTATION, {
     input: {
@@ -83,9 +117,7 @@ async function executeAdjustment(job: typeof integrationOutbox.$inferSelect): Pr
     },
     idempotencyKey: remoteIdempotencyKey(job.id, job.payload),
   });
-  if (!response.inventoryAdjustQuantities.inventoryAdjustmentGroup) {
-    throw new ShopifyGraphQLError("Shopify did not confirm the inventory adjustment.");
-  }
+  if (!response.inventoryAdjustQuantities?.inventoryAdjustmentGroup) throw new ShopifyGraphQLError("Shopify did not confirm the inventory adjustment.");
 }
 
 export async function processShopifyOutbox(options: ProcessShopifyOutboxOptions = {}): Promise<ShopifyOutboxResult> {
@@ -141,7 +173,8 @@ export async function processShopifyOutbox(options: ProcessShopifyOutboxOptions 
     }
 
     try {
-      await executeAdjustment(job);
+      if (Number.isSafeInteger(job.payload.quantity)) await executeSetQuantity(job);
+      else await executeAdjustment(job);
       const completedAt = new Date();
       await db.update(integrationOutbox).set({
         status: "succeeded",

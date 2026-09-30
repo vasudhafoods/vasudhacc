@@ -7,6 +7,8 @@ export interface PhysicalInventoryProduct {
   name: string;
   displayName: string;
   packSize: string | null;
+  category: "noodles" | "cookies" | "rte" | "other";
+  unitPricePaisa: number;
   locations: string[];
   online: number;
   retail: number;
@@ -14,6 +16,8 @@ export interface PhysicalInventoryProduct {
   qc: number;
   damaged: number;
   actual: number;
+  stockValuePaisa: number;
+  earliestExpiryDate: string | null;
   status: InventoryStatus;
   updatedAt: string;
 }

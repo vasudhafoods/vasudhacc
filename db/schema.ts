@@ -40,6 +40,7 @@ export const integrationStatus = pgEnum("integration_status", ["pending", "proce
 export const staffRole = pgEnum("staff_role", ["admin", "management", "warehouse_manager", "warehouse_staff", "retail_sales"]);
 export const recipientType = pgEnum("recipient_type", ["salesperson", "retail_store", "distributor", "event", "sampling", "institutional_customer", "other"]);
 export const offlineCustomerType = pgEnum("offline_customer_type", ["retail", "b2b"]);
+export const productCategory = pgEnum("product_category", ["noodles", "cookies", "rte", "other"]);
 
 export const staffUsers = pgTable("staff_users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -57,6 +58,8 @@ export const products = pgTable("products", {
   sku: text("sku").notNull(),
   name: text("name").notNull(),
   packSize: text("pack_size"),
+  category: productCategory("category").default("other").notNull(),
+  unitPricePaisa: integer("unit_price_paisa").default(0).notNull(),
   barcode: text("barcode"),
   active: boolean("active").default(true).notNull(),
   ...auditColumns,
@@ -134,6 +137,8 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   stockRequestId: uuid("stock_request_id"),
   actorUsername: text("actor_username").notNull(),
   reason: text("reason").notNull(),
+  supplierName: text("supplier_name"),
+  invoiceValuePaisa: integer("invoice_value_paisa"),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -186,6 +191,13 @@ export const offlineSales = pgTable("offline_sales", {
   totalAmountPaisa: integer("total_amount_paisa").notNull(),
   reference: text("reference"),
   notes: text("notes"),
+  orderType: text("order_type").default("retail").notNull(),
+  deliveryStatus: text("delivery_status").default("packing").notNull(),
+  location: text("location"),
+  deliveryPartner: text("delivery_partner"),
+  deliveryCostPaisa: integer("delivery_cost_paisa"),
+  lrNumber: text("lr_number"),
+  lines: jsonb("lines").$type<{ productName: string; quantity: number; unitPricePaisa: number }[]>().default([]).notNull(),
   createdBy: text("created_by").notNull(),
   ...auditColumns,
 }, (table) => [

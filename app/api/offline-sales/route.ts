@@ -1,13 +1,21 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
+import { createOfflineSale, OfflineSalesError } from "@/services/offline-sales";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const SALES_ACCESS = ["admin", "management", "retail_sales"] as const;
 
-export async function POST() {
+export async function POST(request: Request) {
   const session = await getDashboardSession();
   if (!session) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
   if (!sessionHasRole(session, SALES_ACCESS)) return Response.json({ error: { code: "FORBIDDEN", message: "This account cannot record offline sales." } }, { status: 403 });
-  return Response.json({ error: { code: "OFFLINE_SALES_CLOSED", message: "Retail and B2B orders are no longer recorded." } }, { status: 410 });
+  try {
+    const body = await request.json() as Record<string, unknown>;
+    const result = await createOfflineSale({ saleDate: String(body.saleDate ?? ""), customerName: String(body.customerName ?? ""), customerContact: body.customerContact ? String(body.customerContact) : undefined, customerType: body.customerType === "b2b" ? "b2b" : "retail", isNewB2bCustomer: Boolean(body.isNewB2bCustomer), totalAmountPaisa: Math.round(Number(body.totalAmount) * 100), initialCollectionPaisa: Math.round(Number(body.initialCollection ?? 0) * 100), reference: body.reference ? String(body.reference) : undefined, notes: body.notes ? String(body.notes) : undefined, actorUsername: session.username, idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "", orderType: typeof body.orderType === "string" ? body.orderType : "retail", location: typeof body.location === "string" ? body.location : undefined, deliveryStatus: typeof body.deliveryStatus === "string" ? body.deliveryStatus : "packing", deliveryPartner: typeof body.deliveryPartner === "string" ? body.deliveryPartner : undefined, deliveryCostPaisa: body.deliveryCost === undefined ? undefined : Math.round(Number(body.deliveryCost) * 100), lrNumber: typeof body.lrNumber === "string" ? body.lrNumber : undefined, lines: Array.isArray(body.lines) ? body.lines as { productName: string; quantity: number; unitPricePaisa: number }[] : [] });
+    return Response.json({ ok: true, result }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    if (error instanceof OfflineSalesError) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.code === "NOT_FOUND" ? 404 : 400 });
+    return Response.json({ error: { code: "SALE_FAILED", message: error instanceof Error ? error.message : "Offline sale could not be saved." } }, { status: 500 });
+  }
 }

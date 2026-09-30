@@ -15,6 +15,15 @@ type SaleDraft = {
   initialCollection: string;
   reference: string;
   notes: string;
+  orderType: "retail" | "sample" | "inhand" | "other";
+  location: string;
+  deliveryStatus: "packing" | "shipped" | "dispatched" | "delivered";
+  deliveryPartner: string;
+  deliveryCost: string;
+  lrNumber: string;
+  productName: string;
+  quantity: string;
+  unitSalePrice: string;
 };
 
 function indiaToday(): string {
@@ -23,7 +32,7 @@ function indiaToday(): string {
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
-const initialDraft = (): SaleDraft => ({ saleDate: indiaToday(), customerName: "", customerContact: "", customerType: "retail", isNewB2bCustomer: false, totalAmount: "", initialCollection: "", reference: "", notes: "" });
+const initialDraft = (): SaleDraft => ({ saleDate: indiaToday(), customerName: "", customerContact: "", customerType: "retail", isNewB2bCustomer: false, totalAmount: "", initialCollection: "", reference: "", notes: "", orderType: "retail", location: "", deliveryStatus: "packing", deliveryPartner: "", deliveryCost: "", lrNumber: "", productName: "", quantity: "", unitSalePrice: "" });
 const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value / 100);
 const inputClass = "mt-1.5 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
 
@@ -77,7 +86,7 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
       const response = await fetch("/api/offline-sales", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({ ...draft, lines: draft.productName ? [{ productName: draft.productName, quantity: Number(draft.quantity), unitPricePaisa: decimal(draft.unitSalePrice) }] : [] }),
       });
       const body = await response.json() as { result?: { sale?: OfflineSaleRow; duplicate?: boolean }; error?: { message?: string } };
       if (!response.ok || !body.result?.sale) throw new Error(body.error?.message ?? "Offline sale could not be saved.");
@@ -133,7 +142,16 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h3 className="font-bold text-slate-900">New offline sale</h3><p className="mt-1 text-xs text-slate-500">Use one entry for one invoice, cash sale, B2B order, or retail sale.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${draftStatus.className}`}>{draftStatus.label}</span></div>
         <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <label className="text-sm font-semibold text-slate-700">Sale date<input type="date" value={draft.saleDate} onChange={(event) => update("saleDate", event.target.value)} className={inputClass} required/></label>
+          <label className="text-sm font-semibold text-slate-700">Order type<select value={draft.orderType} onChange={(event) => update("orderType", event.target.value as SaleDraft["orderType"])} className={inputClass}><option value="retail">Retail</option><option value="sample">Sample</option><option value="inhand">Inhand</option><option value="other">Other</option></select></label>
           <label className="text-sm font-semibold text-slate-700">Customer / business name<input value={draft.customerName} onChange={(event) => update("customerName", event.target.value)} className={inputClass} placeholder="Example: Sri Lakshmi Stores" required minLength={2} maxLength={160}/></label>
+          <label className="text-sm font-semibold text-slate-700">Location<input value={draft.location} onChange={(event) => update("location", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">Product name<input value={draft.productName} onChange={(event) => update("productName", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">Quantity<input type="number" min="1" step="1" value={draft.quantity} onChange={(event) => update("quantity", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">Unit sale price (₹)<input type="number" min="0" step="0.01" value={draft.unitSalePrice} onChange={(event) => update("unitSalePrice", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">Fulfillment status<select value={draft.deliveryStatus} onChange={(event) => update("deliveryStatus", event.target.value as SaleDraft["deliveryStatus"])} className={inputClass}><option value="packing">Packing</option><option value="shipped">Shipped</option><option value="dispatched">Dispatched</option><option value="delivered">Delivered</option></select></label>
+          <label className="text-sm font-semibold text-slate-700">Delivery partner<input value={draft.deliveryPartner} onChange={(event) => update("deliveryPartner", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">Delivery cost (₹)<input type="number" min="0" step="0.01" value={draft.deliveryCost} onChange={(event) => update("deliveryCost", event.target.value)} className={inputClass}/></label>
+          <label className="text-sm font-semibold text-slate-700">LR number<input value={draft.lrNumber} onChange={(event) => update("lrNumber", event.target.value)} className={inputClass}/></label>
           <label className="text-sm font-semibold text-slate-700">Phone / contact <span className="font-normal text-slate-400">optional</span><input value={draft.customerContact} onChange={(event) => update("customerContact", event.target.value)} className={inputClass} placeholder="Phone or contact person" maxLength={80}/></label>
           <label className="text-sm font-semibold text-slate-700">Customer type<select value={draft.customerType} onChange={(event) => update("customerType", event.target.value as OfflineCustomerType)} className={inputClass}><option value="retail">Retail customer</option><option value="b2b">B2B customer</option></select></label>
           <label className="text-sm font-semibold text-slate-700">Total sale amount (₹)<input inputMode="decimal" value={draft.totalAmount} onChange={(event) => update("totalAmount", event.target.value)} className={inputClass} placeholder="0.00" required/></label>

@@ -35,9 +35,11 @@ export async function POST(request: Request) {
       actorUsername: session.username,
       reason: "Warehouse stock received and allocated",
       source: String(body.source ?? "Warehouse stock entry").trim(),
+      supplierName: body.supplierName ? String(body.supplierName).trim() : undefined,
+      invoiceValuePaisa: body.invoiceValue === undefined || body.invoiceValue === "" ? undefined : Math.round(Number(body.invoiceValue) * 100),
+      referenceId: body.referenceId ? String(body.referenceId) : undefined,
       idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "",
       shopifyMappingId: body.shopifyMappingId ? String(body.shopifyMappingId) : undefined,
-      referenceId: body.referenceId ? String(body.referenceId) : undefined,
     });
     const shopifySync = await attemptAutomaticShopifySync(result.transactionId, result.shopifySync);
     return Response.json({ ok: true, result: { ...result, shopifySync } }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });

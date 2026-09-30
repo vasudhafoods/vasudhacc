@@ -37,6 +37,8 @@ export interface ReceiveStockInput {
   actorUsername: string;
   reason: string;
   source: string;
+  supplierName?: string;
+  invoiceValuePaisa?: number;
   idempotencyKey: string;
   shopifyMappingId?: string;
   referenceId?: string;
@@ -152,15 +154,15 @@ function validateReceipt(input: ReceiveStockInput) {
   if (quantities.some((quantity) => !Number.isSafeInteger(quantity) || quantity < 0) || input.receivedQuantity <= 0) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Receipt quantities must be non-negative whole numbers and received quantity must be positive.");
   }
-  if (input.retailQuantity !== 0) throw new InventoryCommandError("INVALID_RECEIPT", "New stock can only be allocated to Shopify and Buffer.");
   if (input.onlineQuantity + input.retailQuantity + input.bufferQuantity + input.damagedQuantity !== input.receivedQuantity) {
-    throw new InventoryCommandError("INVALID_RECEIPT", "Shopify, Buffer and Damaged allocation must equal the received quantity.");
+    throw new InventoryCommandError("INVALID_RECEIPT", "Shopify, Retail, Buffer and Damaged allocation must equal the received quantity.");
   }
   const usableQuantity = input.receivedQuantity - input.damagedQuantity;
-  const expectedOnlineQuantity = Math.round(usableQuantity * 0.7);
-  const expectedBufferQuantity = usableQuantity - expectedOnlineQuantity;
-  if (input.onlineQuantity !== expectedOnlineQuantity || input.bufferQuantity !== expectedBufferQuantity) {
-    throw new InventoryCommandError("INVALID_RECEIPT", `Usable stock must be allocated automatically: ${expectedOnlineQuantity} packets to Shopify and ${expectedBufferQuantity} packets to Buffer.`);
+  const expectedOnlineQuantity = Math.round(usableQuantity * 0.4);
+  const expectedRetailQuantity = Math.round(usableQuantity * 0.4);
+  const expectedBufferQuantity = usableQuantity - expectedOnlineQuantity - expectedRetailQuantity;
+  if (input.onlineQuantity !== expectedOnlineQuantity || input.retailQuantity !== expectedRetailQuantity || input.bufferQuantity !== expectedBufferQuantity) {
+    throw new InventoryCommandError("INVALID_RECEIPT", `Usable stock must be allocated automatically: ${expectedOnlineQuantity} packets to Shopify, ${expectedRetailQuantity} packets to Retail and ${expectedBufferQuantity} packets to Buffer.`);
   }
   if (!input.batchNumber.trim() || !input.source.trim() || !input.reason.trim() || !input.actorUsername.trim() || !input.idempotencyKey.trim()) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Batch, source, reason, actor and idempotency key are required.");
@@ -425,7 +427,7 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
     }
 
     const allocation = new Map<InventoryBucket, number>([
-      ["online", input.onlineQuantity], ["buffer", input.bufferQuantity], ["damaged", input.damagedQuantity],
+      ["online", input.onlineQuantity], ["retail", input.retailQuantity], ["buffer", input.bufferQuantity], ["damaged", input.damagedQuantity],
     ]);
     const buckets = [...allocation.entries()].filter(([, quantity]) => quantity > 0).map(([bucket]) => bucket);
     await tx.insert(inventoryBalances).values(buckets.map((bucket) => ({ productId: input.productId, warehouseLocationId: input.warehouseLocationId, bucket })))
@@ -453,6 +455,8 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
       referenceId: input.referenceId,
       actorUsername: input.actorUsername,
       reason: input.reason,
+      supplierName: input.supplierName?.trim() || null,
+      invoiceValuePaisa: input.invoiceValuePaisa ?? null,
       metadata: { source: input.source, batchNumber: input.batchNumber },
     }).returning({ id: inventoryTransactions.id });
 
@@ -470,7 +474,8 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
     await tx.insert(inventoryTransactionLines).values(lines);
 
     if (input.onlineQuantity > 0 && mapping) {
-      await tx.insert(integrationOutbox).values({ transactionId: transaction.id, operation: "shopify_inventory_adjust", idempotencyKey: `${input.idempotencyKey}:shopify`, payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantityDelta: input.onlineQuantity, reason: "received" } });
+      const onlineBalance = balances.find((balance) => balance.bucket === "online");
+      await tx.insert(integrationOutbox).values({ transactionId: transaction.id, operation: "shopify_inventory_adjust", idempotencyKey: `${input.idempotencyKey}:shopify`, payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantity: (onlineBalance?.onHand ?? 0) + input.onlineQuantity, reason: "received" } });
     }
     await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.stock_received", entityType: "inventory_transaction", entityId: transaction.id, previousValue, newValue, reason: input.reason });
     return { transactionId: transaction.id, transactionNumber, duplicate: false, receivedQuantity: input.receivedQuantity, shopifySync: input.onlineQuantity > 0 ? "pending" : "not_required" };

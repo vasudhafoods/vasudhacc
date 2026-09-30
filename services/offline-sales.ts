@@ -54,6 +54,13 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     paymentStatus: paymentStatus(sale.totalAmountPaisa, collected),
     reference: sale.reference,
     notes: sale.notes,
+    orderType: sale.orderType,
+    location: sale.location,
+    deliveryStatus: sale.deliveryStatus,
+    deliveryPartner: sale.deliveryPartner,
+    deliveryCostPaisa: sale.deliveryCostPaisa,
+    lrNumber: sale.lrNumber,
+    lines: sale.lines,
     createdBy: sale.createdBy,
   };
 }
@@ -107,6 +114,13 @@ export async function createOfflineSale(input: {
   initialCollectionPaisa: number;
   reference?: string;
   notes?: string;
+  orderType?: string;
+  location?: string;
+  deliveryStatus?: string;
+  deliveryPartner?: string;
+  deliveryCostPaisa?: number;
+  lrNumber?: string;
+  lines?: { productName: string; quantity: number; unitPricePaisa: number }[];
   actorUsername: string;
   idempotencyKey: string;
 }): Promise<{ sale: OfflineSaleRow; duplicate: boolean }> {
@@ -141,6 +155,13 @@ export async function createOfflineSale(input: {
       totalAmountPaisa,
       reference,
       notes,
+      orderType: input.orderType ?? "retail",
+      location: input.location?.trim() || null,
+      deliveryStatus: input.deliveryStatus ?? "packing",
+      deliveryPartner: input.deliveryPartner?.trim() || null,
+      deliveryCostPaisa: input.deliveryCostPaisa ?? null,
+      lrNumber: input.lrNumber?.trim() || null,
+      lines: input.lines ?? [],
       createdBy: input.actorUsername,
     }).returning();
     if (input.initialCollectionPaisa > 0) {

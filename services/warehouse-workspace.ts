@@ -37,7 +37,7 @@ function productAuditActivity(row: typeof auditEvents.$inferSelect): WarehouseAc
 export async function getWarehouseWorkspaceData(actorUsername: string): Promise<WarehouseWorkspaceData> {
   const db = getDatabase();
   const [productRows, mappingRows, locationRows, balanceRows, transactionRows, productAuditRows] = await Promise.all([
-    db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize })
+    db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize, category: products.category, unitPricePaisa: products.unitPricePaisa })
       .from(products).where(eq(products.active, true)).orderBy(products.name, products.sku),
     db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId, status: shopifyMappings.status })
       .from(shopifyMappings),
@@ -186,6 +186,8 @@ export async function createWarehouseProduct(input: {
   sku: string;
   name: string;
   packSize?: string;
+  category?: "noodles" | "cookies" | "rte" | "other";
+  unitPricePaisa?: number;
   barcode?: string;
 }, actorUsername: string): Promise<WarehouseProductOption> {
   const sku = input.sku.trim().toUpperCase();
@@ -209,11 +211,17 @@ export async function createWarehouseProduct(input: {
 
   try {
     return await db.transaction(async (tx) => {
-      const [product] = await tx.insert(products).values({ sku, name, packSize, barcode }).returning({
+      const category = input.category ?? "other";
+      const unitPricePaisa = input.unitPricePaisa ?? 0;
+      if (!["noodles", "cookies", "rte", "other"].includes(category)) throw new WarehouseProductError("INVALID_PRODUCT", "Select a valid product category.");
+      if (!Number.isSafeInteger(unitPricePaisa) || unitPricePaisa < 0) throw new WarehouseProductError("INVALID_PRODUCT", "Enter a valid non-negative unit price.");
+      const [product] = await tx.insert(products).values({ sku, name, packSize, barcode, category, unitPricePaisa }).returning({
         id: products.id,
         sku: products.sku,
         name: products.name,
         packSize: products.packSize,
+        category: products.category,
+        unitPricePaisa: products.unitPricePaisa,
       });
       await tx.insert(auditEvents).values({
         actorUsername,

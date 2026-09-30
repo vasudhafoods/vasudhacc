@@ -1,7 +1,7 @@
 import "server-only";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sum } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
-import { inventoryBalances, inventoryTransactionLines, inventoryTransactions, products, warehouseLocations } from "@/db/schema";
+import { inventoryBalances, inventoryBatches, inventoryTransactionLines, inventoryTransactions, products, warehouseLocations } from "@/db/schema";
 import { LOW_STOCK_THRESHOLD } from "@/lib/constants/inventory";
 import type { PhysicalInventoryMovement, PhysicalInventoryProduct } from "@/types/physical-inventory";
 import type { InventoryStatus } from "@/types/inventory";
@@ -16,7 +16,7 @@ function displayName(name: string): string {
 
 function stockStatus(actual: number): InventoryStatus {
   if (actual <= 0) return "out-of-stock";
-  if (actual <= LOW_STOCK_THRESHOLD) return "low-stock";
+  if (actual < 100) return "low-stock";
   return "in-stock";
 }
 
@@ -25,15 +25,20 @@ function buildProduct(rows: {
   sku: string;
   name: string;
   packSize: string | null;
+  category: "noodles" | "cookies" | "rte" | "other";
+  unitPricePaisa: number;
   bucket: "online" | "retail" | "buffer" | "qc" | "damaged";
   onHand: number;
   updatedAt: Date;
   locationName: string;
+  expiryDate: Date | null;
 }[]): PhysicalInventoryProduct {
   const first = rows[0];
   const buckets = { online: 0, retail: 0, buffer: 0, qc: 0, damaged: 0 };
   for (const row of rows) buckets[row.bucket] += row.onHand;
   const actual = buckets.online + buckets.retail + buckets.buffer + buckets.qc;
+  const stockValuePaisa = actual * first.unitPricePaisa;
+  const expiryDate = rows.filter((row) => row.expiryDate && row.onHand > 0).sort((left, right) => left.expiryDate!.getTime() - right.expiryDate!.getTime())[0]?.expiryDate ?? null;
   const latest = rows.reduce((value, row) => row.updatedAt > value ? row.updatedAt : value, first.updatedAt);
   return {
     id: first.id,
@@ -41,9 +46,13 @@ function buildProduct(rows: {
     name: first.name,
     displayName: displayName(first.name),
     packSize: first.packSize,
+    category: first.category,
+    unitPricePaisa: first.unitPricePaisa,
     locations: [...new Set(rows.map((row) => row.locationName))].sort((left, right) => left.localeCompare(right)),
     ...buckets,
     actual,
+    stockValuePaisa,
+    earliestExpiryDate: expiryDate?.toISOString() ?? null,
     status: stockStatus(actual),
     updatedAt: latest.toISOString(),
   };
@@ -55,6 +64,8 @@ export async function getPhysicalInventoryProducts(): Promise<PhysicalInventoryP
     sku: products.sku,
     name: products.name,
     packSize: products.packSize,
+    category: products.category,
+    unitPricePaisa: products.unitPricePaisa,
     bucket: inventoryBalances.bucket,
     onHand: inventoryBalances.onHand,
     updatedAt: inventoryBalances.updatedAt,
@@ -65,11 +76,18 @@ export async function getPhysicalInventoryProducts(): Promise<PhysicalInventoryP
     .where(and(eq(products.active, true), eq(warehouseLocations.active, true)))
     .orderBy(products.name, products.sku);
 
-  const groups = new Map<string, typeof rows>();
+  const batchRows = await getDatabase().select({ productId: inventoryBatches.productId, expiryDate: inventoryBatches.expiryDate, onHand: sum(inventoryTransactionLines.quantityDelta) }).from(inventoryBatches)
+    .leftJoin(inventoryTransactionLines, eq(inventoryTransactionLines.batchId, inventoryBatches.id))
+    .groupBy(inventoryBatches.id, inventoryBatches.productId, inventoryBatches.expiryDate);
+  const expiryByProduct = new Map<string, Date>();
+  for (const batch of batchRows) if (batch.expiryDate && Number(batch.onHand ?? 0) > 0 && (!expiryByProduct.has(batch.productId) || batch.expiryDate < expiryByProduct.get(batch.productId)!)) expiryByProduct.set(batch.productId, batch.expiryDate);
+
+  type InventoryRow = (typeof rows)[number] & { expiryDate: Date | null };
+  const groups = new Map<string, InventoryRow[]>();
   for (const row of rows) {
     if (isSalesBundle(row.name)) continue;
     const current = groups.get(row.id) ?? [];
-    current.push(row);
+    current.push({ ...row, expiryDate: expiryByProduct.get(row.id) ?? null });
     groups.set(row.id, current);
   }
   return [...groups.values()].map(buildProduct).sort((left, right) => left.displayName.localeCompare(right.displayName));

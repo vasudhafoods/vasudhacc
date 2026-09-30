@@ -12,6 +12,8 @@ interface ReceiptDraft {
   warehouseLocationId: string;
   batchNumber: string;
   source: string;
+  supplierName: string;
+  invoiceValue: string;
   referenceId: string;
   manufacturingDate: string;
   expiryDate: string;
@@ -24,6 +26,8 @@ interface ProductDraft {
   name: string;
   packSize: string;
   barcode: string;
+  category: "noodles" | "cookies" | "rte" | "other";
+  unitPrice: string;
 }
 
 interface DispatchLineDraft {
@@ -104,7 +108,7 @@ interface DisposalSuccess {
   shopifySync: ShopifySyncStatus;
 }
 
-const EMPTY_PRODUCT: ProductDraft = { sku: "", name: "", packSize: "", barcode: "" };
+const EMPTY_PRODUCT: ProductDraft = { sku: "", name: "", packSize: "", barcode: "", category: "other", unitPrice: "" };
 
 function quantity(value: string): number {
   if (value.trim() === "") return 0;
@@ -161,6 +165,8 @@ export function WarehouseWorkspace({ user, initialData }: {
     warehouseLocationId: firstLocation,
     batchNumber: "",
     source: "Production / supplier delivery",
+    supplierName: "",
+    invoiceValue: "",
     referenceId: "",
     manufacturingDate: "",
     expiryDate: "",
@@ -181,9 +187,9 @@ export function WarehouseWorkspace({ user, initialData }: {
   const receivedQuantity = quantity(receipt.receivedQuantity);
   const damagedQuantity = quantity(receipt.damagedQuantity);
   const usableQuantity = receivedQuantity - damagedQuantity;
-  const onlineQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.7) : 0;
-  const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity : 0;
-  const retailQuantity = 0;
+  const onlineQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
+  const retailQuantity = usableQuantity >= 0 ? Math.round(usableQuantity * 0.4) : 0;
+  const bufferQuantity = usableQuantity >= 0 ? usableQuantity - onlineQuantity - retailQuantity : 0;
   const wholeQuantities = [receivedQuantity, onlineQuantity, retailQuantity, damagedQuantity, bufferQuantity].every(Number.isSafeInteger);
   const dispatchTotal = dispatch.lines.reduce((total, line) => total + (Number.isSafeInteger(quantity(line.quantity)) ? quantity(line.quantity) : 0), 0);
   const dispatchLocation = initialData.locations.find((location) => location.id === dispatch.warehouseLocationId) ?? null;
@@ -252,6 +258,7 @@ export function WarehouseWorkspace({ user, initialData }: {
         body: JSON.stringify({
           ...receipt,
           receivedQuantity,
+          invoiceValue: receipt.invoiceValue,
           onlineQuantity,
           retailQuantity,
           damagedQuantity,
@@ -401,17 +408,21 @@ export function WarehouseWorkspace({ user, initialData }: {
           <div className="grid gap-5 md:grid-cols-2">
             <Field label="Product"><select className={inputClass} value={receipt.productId} onChange={(event) => updateReceipt("productId", event.target.value)} required><option value="">Choose product</option>{initialData.products.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.sku}</option>)}</select></Field>
             <Field label="Warehouse location"><select className={inputClass} value={receipt.warehouseLocationId} onChange={(event) => updateReceipt("warehouseLocationId", event.target.value)} required><option value="">Choose location</option>{initialData.locations.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></Field>
-            <Field label="Batch number" hint="Enter exactly as printed on the carton or pouch."><input className={inputClass} value={receipt.batchNumber} onChange={(event) => updateReceipt("batchNumber", event.target.value)} placeholder="Example: MIL-260908-A" required/></Field>
+            <Field label="Supplier name"><input className={inputClass} value={receipt.supplierName} onChange={(event) => updateReceipt("supplierName", event.target.value)} required/></Field>
+            <Field label="Invoice number"><input className={inputClass} value={receipt.referenceId} onChange={(event) => updateReceipt("referenceId", event.target.value)} required/></Field>
+            <Field label="Invoice value (₹)"><input className={inputClass} type="number" min="0" step="0.01" value={receipt.invoiceValue} onChange={(event) => updateReceipt("invoiceValue", event.target.value)}/></Field>
+            <Field label="Batch code" hint="Enter exactly as printed on the carton or pouch."><input className={inputClass} value={receipt.batchNumber} onChange={(event) => updateReceipt("batchNumber", event.target.value)} placeholder="Example: MIL-260908-A" required/></Field>
             <Field label="Total units received"><input className={inputClass} type="number" inputMode="numeric" min="1" step="1" value={receipt.receivedQuantity} onChange={(event) => updateReceipt("receivedQuantity", event.target.value)} placeholder="0" required/></Field>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-            <h3 className="font-bold text-slate-900">Shopify and buffer allocation</h3>
-            <p className="mt-1 text-sm text-slate-500">Usable stock is allocated automatically: 70% to Shopify and the remaining 30% to Buffer.</p>
-            <div className="mt-5 grid gap-4 sm:grid-cols-3">
+            <h3 className="font-bold text-slate-900">Shopify, retail and buffer allocation</h3>
+            <p className="mt-1 text-sm text-slate-500">Usable stock is allocated automatically: 40% to Shopify, 40% to Retail, and 20% to Buffer. Whole packets are rounded, with any remainder assigned to Buffer.</p>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Damaged / rejected"><input className={inputClass} type="number" inputMode="numeric" min="0" step="1" value={receipt.damagedQuantity} onChange={(event) => updateReceipt("damagedQuantity", event.target.value)}/></Field>
-              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Shopify · 70%</p><p className="mt-2 text-3xl font-bold text-emerald-800">{onlineQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
-              <div className="rounded-xl border border-amber-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Buffer · 30%</p><p className="mt-2 text-3xl font-bold text-amber-800">{bufferQuantity}</p><p className="mt-1 text-xs text-slate-500">Protected packets</p></div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Shopify · 40%</p><p className="mt-2 text-3xl font-bold text-emerald-800">{onlineQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-blue-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Retail · 40%</p><p className="mt-2 text-3xl font-bold text-blue-800">{retailQuantity}</p><p className="mt-1 text-xs text-slate-500">Base packets</p></div>
+              <div className="rounded-xl border border-amber-200 bg-white p-3.5"><p className="text-sm font-semibold text-slate-700">Buffer · 20%</p><p className="mt-2 text-3xl font-bold text-amber-800">{bufferQuantity}</p><p className="mt-1 text-xs text-slate-500">Protected packets</p></div>
             </div>
           </div>
 
@@ -419,7 +430,6 @@ export function WarehouseWorkspace({ user, initialData }: {
             <Field label="Manufacturing date"><input className={inputClass} type="date" value={receipt.manufacturingDate} onChange={(event) => updateReceipt("manufacturingDate", event.target.value)}/></Field>
             <Field label="Expiry date"><input className={inputClass} type="date" value={receipt.expiryDate} onChange={(event) => updateReceipt("expiryDate", event.target.value)}/></Field>
             <Field label="Received from"><input className={inputClass} value={receipt.source} onChange={(event) => updateReceipt("source", event.target.value)} placeholder="Production / supplier delivery"/></Field>
-            <Field label="Invoice or reference number"><input className={inputClass} value={receipt.referenceId} onChange={(event) => updateReceipt("referenceId", event.target.value)} placeholder="Optional"/></Field>
           </div></details>
           <div className="flex justify-end"><button type="submit" disabled={!initialData.products.length || !initialData.locations.length} className="h-12 rounded-xl bg-[#174f40] px-7 text-base font-bold text-white shadow-sm transition hover:bg-[#123f34] disabled:cursor-not-allowed disabled:opacity-50">Review stock entry →</button></div>
         </form> : null}
@@ -430,7 +440,7 @@ export function WarehouseWorkspace({ user, initialData }: {
           <dl className="rounded-2xl border border-slate-200 px-5">
             <SummaryRow label="Product" value={<>{selectedProduct.name}<span className="block text-xs font-normal text-slate-500">{selectedProduct.sku}</span></>}/>
             <SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Total received" value={`${receivedQuantity} units`} strong/>
-            <SummaryRow label="Shopify" value={`${onlineQuantity} units`}/><SummaryRow label="Buffer" value={`${bufferQuantity} units`}/><SummaryRow label="Damaged / rejected" value={`${damagedQuantity} units`}/>
+            <SummaryRow label="Shopify" value={`${onlineQuantity} units`}/><SummaryRow label="Retail" value={`${retailQuantity} units`}/><SummaryRow label="Buffer" value={`${bufferQuantity} units`}/><SummaryRow label="Damaged / rejected" value={`${damagedQuantity} units`}/>
             {receipt.referenceId ? <SummaryRow label="Reference" value={receipt.referenceId}/> : null}
           </dl>
           <p className="text-center text-xs text-slate-500">Submitting as <strong>{user.username}</strong>. The Online allocation will be sent to Shopify automatically.</p>
@@ -439,7 +449,7 @@ export function WarehouseWorkspace({ user, initialData }: {
 
         {receiptStep === "success" && receiptSuccess && selectedProduct && selectedLocation ? <div className="mx-auto max-w-2xl text-center">
           <div className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-3xl font-bold text-emerald-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">{receiptSuccess.receivedQuantity} units added</h3><p className="mt-2 text-sm text-slate-500">The inventory ledger and database were updated.</p>
-          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Shopify / Buffer / Damaged" value={`${onlineQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "succeeded" ? <SummaryRow label="Shopify" value={<span className="text-emerald-700">Synced automatically ✓</span>}/> : null}{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value={<span className="text-amber-700">Automatic retry queued</span>}/> : null}{receiptSuccess.shopifySync === "failed" ? <SummaryRow label="Shopify" value={<span className="text-rose-700">Needs administrator attention</span>}/> : null}</dl>
+          <dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={selectedProduct.name}/><SummaryRow label="Location" value={selectedLocation.name}/><SummaryRow label="Batch" value={receipt.batchNumber}/><SummaryRow label="Shopify / Retail / Buffer / Damaged" value={`${onlineQuantity} / ${retailQuantity} / ${bufferQuantity} / ${damagedQuantity}`}/><SummaryRow label="Transaction" value={receiptSuccess.transactionNumber}/><SummaryRow label="Submitted by" value={user.username}/>{receiptSuccess.shopifySync === "succeeded" ? <SummaryRow label="Shopify" value={<span className="text-emerald-700">Synced automatically ✓</span>}/> : null}{receiptSuccess.shopifySync === "pending" ? <SummaryRow label="Shopify" value={<span className="text-amber-700">Automatic retry queued</span>}/> : null}{receiptSuccess.shopifySync === "failed" ? <SummaryRow label="Shopify" value={<span className="text-rose-700">Needs administrator attention</span>}/> : null}</dl>
           <div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={startAnotherReceipt} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Receive more stock</button></div>
         </div> : null}
       </div>
@@ -493,7 +503,7 @@ export function WarehouseWorkspace({ user, initialData }: {
     {panel === "product" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{productStep === "edit" ? "Step 1 of 2 · Enter" : productStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{productStep === "success" ? "Product created successfully" : "Add a new product"}</h2><p className="mt-1 text-sm text-slate-500">Use this only when the SKU is not already in the product list.</p></div>
       <div className="p-5 sm:p-7">
-        {productStep === "edit" ? <form className="mx-auto max-w-2xl space-y-5" onSubmit={reviewProduct}><ErrorMessage message={productError}/><Field label="Product name" hint="Use the name printed on the product."><input className={inputClass} value={product.name} onChange={(event) => updateProduct("name", event.target.value)} placeholder="Example: Millet Noodles Classic" required/></Field><div className="grid gap-5 sm:grid-cols-2"><Field label="SKU" hint="Must be unique."><input className={`${inputClass} uppercase`} value={product.sku} onChange={(event) => updateProduct("sku", event.target.value)} placeholder="Example: MN-CLASSIC-180" required/></Field><Field label="Pack size"><input className={inputClass} value={product.packSize} onChange={(event) => updateProduct("packSize", event.target.value)} placeholder="Example: 180 g"/></Field></div><Field label="Barcode" hint="Optional. Scan or type the number if available."><input className={inputClass} value={product.barcode} onChange={(event) => updateProduct("barcode", event.target.value)} placeholder="Optional barcode"/></Field><div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">Creating a product adds it to Neon. Before receiving its stock, an administrator must connect it to Shopify so the automatic Online allocation has a verified destination.</div><div className="flex justify-end"><button type="submit" className="h-12 rounded-xl bg-[#174f40] px-7 font-bold text-white">Review new product →</button></div></form> : null}
+        {productStep === "edit" ? <form className="mx-auto max-w-2xl space-y-5" onSubmit={reviewProduct}><ErrorMessage message={productError}/><Field label="Product name" hint="Use the name printed on the product."><input className={inputClass} value={product.name} onChange={(event) => updateProduct("name", event.target.value)} placeholder="Example: Millet Noodles Classic" required/></Field><div className="grid gap-5 sm:grid-cols-2"><Field label="SKU" hint="Must be unique."><input className={`${inputClass} uppercase`} value={product.sku} onChange={(event) => updateProduct("sku", event.target.value)} placeholder="Example: MN-CLASSIC-180" required/></Field><Field label="Product category"><select className={inputClass} value={product.category} onChange={(event) => updateProduct("category", event.target.value as ProductDraft["category"])}><option value="noodles">Noodles</option><option value="cookies">Cookies</option><option value="rte">RTE</option><option value="other">Other</option></select></Field><Field label="Fixed unit price (₹)"><input className={inputClass} type="number" min="0" step="0.01" value={product.unitPrice} onChange={(event) => updateProduct("unitPrice", event.target.value)}/></Field><Field label="Pack size"><input className={inputClass} value={product.packSize} onChange={(event) => updateProduct("packSize", event.target.value)} placeholder="Example: 180 g"/></Field></div><Field label="Barcode" hint="Optional. Scan or type the number if available."><input className={inputClass} value={product.barcode} onChange={(event) => updateProduct("barcode", event.target.value)} placeholder="Optional barcode"/></Field><div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">Creating a product adds it to Neon. Before receiving its stock, an administrator must connect it to Shopify so the automatic Online allocation has a verified destination.</div><div className="flex justify-end"><button type="submit" className="h-12 rounded-xl bg-[#174f40] px-7 font-bold text-white">Review new product →</button></div></form> : null}
         {productStep === "review" ? <div className="mx-auto max-w-2xl space-y-5"><ErrorMessage message={productError}/><div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><strong>Check for duplicates</strong> before submitting, especially the product SKU.</div><dl className="rounded-2xl border border-slate-200 px-5"><SummaryRow label="Product name" value={product.name}/><SummaryRow label="SKU" value={product.sku.trim().toUpperCase()} strong/><SummaryRow label="Pack size" value={product.packSize || "Not entered"}/><SummaryRow label="Barcode" value={product.barcode || "Not entered"}/><SummaryRow label="Submitted by" value={user.username}/></dl><div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setProductStep("edit")} disabled={submitting} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">← Go back and edit</button><button type="button" onClick={submitProduct} disabled={submitting} className="h-12 rounded-xl bg-[#174f40] font-bold text-white disabled:opacity-60">{submitting ? "Creating…" : "Create product in database"}</button></div></div> : null}
         {productStep === "success" && createdProduct ? <div className="mx-auto max-w-2xl text-center"><div className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-3xl font-bold text-emerald-800">✓</div><h3 className="mt-4 text-2xl font-bold text-slate-950">Product added</h3><p className="mt-2 text-sm text-slate-500">It is now available in the warehouse product list.</p><dl className="mt-6 rounded-2xl border border-slate-200 px-5 text-left"><SummaryRow label="Product" value={createdProduct.name}/><SummaryRow label="SKU" value={createdProduct.sku} strong/><SummaryRow label="Pack size" value={createdProduct.packSize || "Not entered"}/><SummaryRow label="Shopify connection" value="Not linked yet"/><SummaryRow label="Created by" value={user.username}/></dl><div className="mt-6 grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => changePanel("activity")} className="h-12 rounded-xl border border-slate-300 font-bold text-slate-700">View my updates</button><button type="button" onClick={() => { setProduct(EMPTY_PRODUCT); setCreatedProduct(null); setProductStep("edit"); }} className="h-12 rounded-xl bg-[#174f40] font-bold text-white">Add another product</button></div></div> : null}
       </div>

@@ -5,6 +5,8 @@ export interface WarehouseProductOption {
   sku: string;
   name: string;
   packSize: string | null;
+  category: "noodles" | "cookies" | "rte" | "other";
+  unitPricePaisa: number;
   shopifyMappingId: string | null;
 }
 

@@ -112,6 +112,22 @@ export const INVENTORY_ADJUST_QUANTITIES_MUTATION = `#graphql
   }
 `;
 
+export const INVENTORY_SET_QUANTITIES_MUTATION = `#graphql
+  mutation InventorySetQuantities($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
+    inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+      inventoryAdjustmentGroup {
+        id
+        createdAt
+      }
+      userErrors {
+        code
+        field
+        message
+      }
+    }
+  }
+`;
+
 export const WEBHOOK_SUBSCRIPTIONS_QUERY = `#graphql
   query WebhookSubscriptions($first: Int!) {
     webhookSubscriptions(first: $first) {

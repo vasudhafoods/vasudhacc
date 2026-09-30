@@ -15,6 +15,13 @@ export interface OfflineSaleRow {
   paymentStatus: OfflinePaymentStatus;
   reference: string | null;
   notes: string | null;
+  orderType: string;
+  location: string | null;
+  deliveryStatus: string;
+  deliveryPartner: string | null;
+  deliveryCostPaisa: number | null;
+  lrNumber: string | null;
+  lines: { productName: string; quantity: number; unitPricePaisa: number }[];
   createdBy: string;
 }
 
