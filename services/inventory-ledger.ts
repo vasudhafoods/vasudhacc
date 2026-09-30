@@ -39,6 +39,7 @@ export interface ReceiveStockInput {
   source: string;
   supplierName?: string;
   invoiceValuePaisa?: number;
+  receivedAt?: Date;
   idempotencyKey: string;
   shopifyMappingId?: string;
   referenceId?: string;
@@ -76,9 +77,16 @@ export interface TransferInventoryResult {
 
 export interface RetailDispatchInput {
   warehouseLocationId: string;
-  lines: { productId: string; quantity: number }[];
+  lines: { productId: string; quantity: number; unitPricePaisa: number }[];
   destination: string;
   referenceId: string;
+  deliveryDate: Date;
+  orderType: "retail" | "sample" | "inhand" | "other";
+  orderValuePaisa: number;
+  deliveryStatus: "packing" | "shipped" | "dispatched" | "delivered";
+  deliveryPartner: string;
+  deliveryCostPaisa: number;
+  lrNumber: string;
   notes?: string;
   actorUsername: string;
   idempotencyKey: string;
@@ -157,6 +165,11 @@ function validateReceipt(input: ReceiveStockInput) {
   if (input.onlineQuantity + input.retailQuantity + input.bufferQuantity + input.damagedQuantity !== input.receivedQuantity) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Shopify, Retail, Buffer and Damaged allocation must equal the received quantity.");
   }
+  if (!input.expiryDate || !Number.isFinite(input.expiryDate.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "An expiry date is required for every received product.");
+  if (!input.receivedAt || !Number.isFinite(input.receivedAt.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "A valid receiving date is required.");
+  if (!input.supplierName?.trim() || !input.referenceId?.trim()) throw new InventoryCommandError("INVALID_RECEIPT", "Supplier name and invoice number are required.");
+  if (!Number.isSafeInteger(input.invoiceValuePaisa) || (input.invoiceValuePaisa ?? 0) <= 0) throw new InventoryCommandError("INVALID_RECEIPT", "A valid invoice value greater than zero is required.");
+  if (input.expiryDate < input.receivedAt) throw new InventoryCommandError("INVALID_RECEIPT", "Expiry date cannot be before the receiving date.");
   const usableQuantity = input.receivedQuantity - input.damagedQuantity;
   const expectedOnlineQuantity = Math.round(usableQuantity * 0.4);
   const expectedRetailQuantity = Math.round(usableQuantity * 0.4);
@@ -176,11 +189,18 @@ function validateRetailDispatch(input: RetailDispatchInput) {
   if (!input.warehouseLocationId.trim()) throw new InventoryCommandError("INVALID_DISPATCH", "Select the warehouse dispatching this stock.");
   if (!input.destination.trim() || input.destination.trim().length > 200) throw new InventoryCommandError("INVALID_DISPATCH", "Enter a valid retail destination of 200 characters or fewer.");
   if (!input.referenceId.trim() || input.referenceId.trim().length > 100) throw new InventoryCommandError("INVALID_DISPATCH", "Enter an invoice, order, or dispatch reference of 100 characters or fewer.");
+  if (!Number.isFinite(input.deliveryDate.getTime())) throw new InventoryCommandError("INVALID_DISPATCH", "Enter a valid delivery date.");
+  if (!(new Set(["retail", "sample", "inhand", "other"])).has(input.orderType)) throw new InventoryCommandError("INVALID_DISPATCH", "Select a valid order type.");
+  if (!Number.isSafeInteger(input.orderValuePaisa) || input.orderValuePaisa <= 0) throw new InventoryCommandError("INVALID_DISPATCH", "Enter a valid order value greater than zero.");
+  if (!(new Set(["packing", "shipped", "dispatched", "delivered"])).has(input.deliveryStatus)) throw new InventoryCommandError("INVALID_DISPATCH", "Select a valid delivery status.");
+  if (!input.deliveryPartner.trim() || input.deliveryPartner.length > 160) throw new InventoryCommandError("INVALID_DISPATCH", "Enter the delivery partner.");
+  if (!Number.isSafeInteger(input.deliveryCostPaisa) || input.deliveryCostPaisa < 0) throw new InventoryCommandError("INVALID_DISPATCH", "Enter a valid delivery cost (zero is allowed).");
+  if (!input.lrNumber.trim() || input.lrNumber.length > 100) throw new InventoryCommandError("INVALID_DISPATCH", "Enter the LR number.");
   if (!input.actorUsername.trim() || !input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_DISPATCH", "Actor and idempotency key are required.");
   if (!Array.isArray(input.lines) || input.lines.length < 1 || input.lines.length > 50) throw new InventoryCommandError("INVALID_DISPATCH", "Add between 1 and 50 products to the dispatch.");
   const productIds = new Set<string>();
   for (const line of input.lines) {
-    if (!line.productId.trim() || !Number.isSafeInteger(line.quantity) || line.quantity <= 0) throw new InventoryCommandError("INVALID_DISPATCH", "Every dispatch line needs a product and a positive whole-packet quantity.");
+    if (!line.productId.trim() || !Number.isSafeInteger(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unitPricePaisa) || line.unitPricePaisa <= 0) throw new InventoryCommandError("INVALID_DISPATCH", "Every dispatch line needs a product, positive whole-packet quantity, and unit sale price.");
     if (productIds.has(line.productId)) throw new InventoryCommandError("INVALID_DISPATCH", "Add each product only once; update its quantity on the existing line.");
     productIds.add(line.productId);
   }
@@ -262,7 +282,8 @@ export async function dispatchRetailStock(input: RetailDispatchInput): Promise<R
       referenceId: input.referenceId.trim(),
       actorUsername: input.actorUsername,
       reason: "Retail order dispatched from warehouse",
-      metadata: { destination: input.destination.trim(), notes: input.notes?.trim() || null, totalQuantity, lineCount: orderedLines.length },
+      occurredAt: input.deliveryDate,
+      metadata: { destination: input.destination.trim(), notes: input.notes?.trim() || null, totalQuantity, lineCount: orderedLines.length, orderType: input.orderType, orderValuePaisa: input.orderValuePaisa, deliveryStatus: input.deliveryStatus, deliveryPartner: input.deliveryPartner.trim(), deliveryCostPaisa: input.deliveryCostPaisa, lrNumber: input.lrNumber.trim(), lines: orderedLines.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa })) },
     }).returning({ id: inventoryTransactions.id });
 
     const transactionLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
@@ -457,6 +478,7 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
       reason: input.reason,
       supplierName: input.supplierName?.trim() || null,
       invoiceValuePaisa: input.invoiceValuePaisa ?? null,
+      occurredAt: input.receivedAt,
       metadata: { source: input.source, batchNumber: input.batchNumber },
     }).returning({ id: inventoryTransactions.id });
 

@@ -4,6 +4,7 @@ import { getDatabase } from "@/db/client";
 import {
   auditEvents,
   inventoryBalances,
+  inventoryBatches,
   inventoryTransactionLines,
   inventoryTransactions,
   products,
@@ -36,7 +37,7 @@ function productAuditActivity(row: typeof auditEvents.$inferSelect): WarehouseAc
 
 export async function getWarehouseWorkspaceData(actorUsername: string): Promise<WarehouseWorkspaceData> {
   const db = getDatabase();
-  const [productRows, mappingRows, locationRows, balanceRows, transactionRows, productAuditRows] = await Promise.all([
+  const [productRows, mappingRows, locationRows, balanceRows, expiryRows, transactionRows, productAuditRows] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize, category: products.category, unitPricePaisa: products.unitPricePaisa })
       .from(products).where(eq(products.active, true)).orderBy(products.name, products.sku),
     db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId, status: shopifyMappings.status })
@@ -45,6 +46,8 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
       .from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
     db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, bucket: inventoryBalances.bucket, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved })
       .from(inventoryBalances),
+    db.select({ productId: inventoryBatches.productId, warehouseLocationId: inventoryBatches.warehouseLocationId, batchNumber: inventoryBatches.batchNumber, expiryDate: inventoryBatches.expiryDate, transactionId: inventoryTransactionLines.transactionId, quantity: inventoryTransactionLines.quantityDelta })
+      .from(inventoryBatches).leftJoin(inventoryTransactionLines, eq(inventoryTransactionLines.batchId, inventoryBatches.id)),
     db.select({
       id: inventoryTransactions.id,
       transactionNumber: inventoryTransactions.transactionNumber,
@@ -179,7 +182,17 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     available: balance.available,
   }));
 
-  return { products: productOptions, locations: locationRows, retailBalances, balances, activities };
+  const expiryQuantities = new Map<string, number>();
+  for (const row of expiryRows) {
+    const key = `${row.productId}:${row.warehouseLocationId}:${row.batchNumber}`;
+    expiryQuantities.set(key, (expiryQuantities.get(key) ?? 0) + (row.quantity ?? 0));
+  }
+  const expiries = expiryRows.filter((row, index, rows) => row.expiryDate && rows.findIndex((candidate) => candidate.productId === row.productId && candidate.warehouseLocationId === row.warehouseLocationId && candidate.batchNumber === row.batchNumber) === index)
+    .map((row) => ({ productId: row.productId, warehouseLocationId: row.warehouseLocationId, batchNumber: row.batchNumber, expiryDate: row.expiryDate!.toISOString(), remainingQuantity: Math.max(0, expiryQuantities.get(`${row.productId}:${row.warehouseLocationId}:${row.batchNumber}`) ?? 0) }))
+    .filter((batch) => batch.remainingQuantity > 0)
+    .sort((left, right) => left.expiryDate.localeCompare(right.expiryDate));
+
+  return { products: productOptions, locations: locationRows, retailBalances, balances, expiries, activities };
 }
 
 export async function createWarehouseProduct(input: {

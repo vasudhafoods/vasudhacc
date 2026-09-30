@@ -47,5 +47,6 @@ export interface WarehouseWorkspaceData {
   locations: WarehouseLocationOption[];
   retailBalances: WarehouseRetailBalance[];
   balances: WarehouseBucketBalance[];
+  expiries: { productId: string; warehouseLocationId: string; batchNumber: string; expiryDate: string; remainingQuantity: number }[];
   activities: WarehouseActivity[];
 }

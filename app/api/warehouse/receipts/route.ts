@@ -9,8 +9,16 @@ const WAREHOUSE_ACCESS = ["admin", "management", "warehouse_manager", "warehouse
 
 function optionalDate(value: unknown): Date | undefined {
   if (!value) return undefined;
-  const date = new Date(String(value));
+  const raw = String(value);
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00+05:30` : raw);
   if (Number.isNaN(date.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "Manufacturing and expiry dates must be valid dates.");
+  return date;
+}
+
+function receiptDate(value: unknown): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(`${String(value)}T12:00:00+05:30`);
+  if (Number.isNaN(date.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "Receiving date must be a valid date.");
   return date;
 }
 
@@ -37,6 +45,7 @@ export async function POST(request: Request) {
       source: String(body.source ?? "Warehouse stock entry").trim(),
       supplierName: body.supplierName ? String(body.supplierName).trim() : undefined,
       invoiceValuePaisa: body.invoiceValue === undefined || body.invoiceValue === "" ? undefined : Math.round(Number(body.invoiceValue) * 100),
+      receivedAt: receiptDate(body.receiptDate),
       referenceId: body.referenceId ? String(body.referenceId) : undefined,
       idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "",
       shopifyMappingId: body.shopifyMappingId ? String(body.shopifyMappingId) : undefined,

@@ -169,6 +169,20 @@ export const inventoryTransactionLines = pgTable("inventory_transaction_lines", 
   check("inventory_transaction_lines_reconciles", sql`${table.openingBalance} + ${table.quantityDelta} = ${table.closingBalance}`),
 ]);
 
+export const inventoryReceiptAttachments = pgTable("inventory_receipt_attachments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  transactionId: uuid("transaction_id").notNull().references(() => inventoryTransactions.id, { onDelete: "restrict" }),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  fileSize: integer("file_size").notNull(),
+  contentBase64: text("content_base64").notNull(),
+  uploadedBy: text("uploaded_by").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("inventory_receipt_attachments_transaction_idx").on(table.transactionId),
+  check("inventory_receipt_attachments_file_size_positive", sql`${table.fileSize} > 0`),
+]);
+
 export const retailRecipients = pgTable("retail_recipients", {
   id: uuid("id").defaultRandom().primaryKey(),
   type: recipientType("type").notNull(),
