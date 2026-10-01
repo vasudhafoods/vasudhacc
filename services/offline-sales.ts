@@ -425,7 +425,7 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
   const trackingUrl = input.trackingUrl?.trim() ?? "";
   if (deliveryPartner.length > 100 || trackingNumber.length > 120 || trackingUrl.length > 500) throw new OfflineSalesError("INVALID_SALE", "Delivery and tracking details exceed the allowed length.");
   if (trackingUrl) { let url: URL; try { url = new URL(trackingUrl); } catch { throw new OfflineSalesError("INVALID_SALE", "Enter a valid tracking URL."); } if (url.protocol !== "https:") throw new OfflineSalesError("INVALID_SALE", "Tracking URL must use HTTPS."); }
-  if (["shipped", "out_for_delivery", "delivered"].includes(input.status) && !trackingNumber) throw new OfflineSalesError("INVALID_SALE", "Enter a tracking ID before marking the order shipped or later.");
+  if (["shipped", "out_for_delivery"].includes(input.status) && !trackingNumber) throw new OfflineSalesError("INVALID_SALE", "Enter a tracking ID before marking the order shipped or out for delivery.");
   const db = getDatabase();
   return db.transaction(async (tx) => {
     const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).for("update").limit(1);
@@ -440,9 +440,15 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
         if (balance) await tx.update(inventoryBalances).set({ reserved: sql`GREATEST(${inventoryBalances.reserved} - ${line.quantity}, 0)`, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
       }
     } else if (previousStatus !== input.status) {
-      const next = previousStatus === "packing" ? "shipped" : previousStatus === "shipped" ? "out_for_delivery" : ["out_for_delivery", "dispatched"].includes(previousStatus) ? "delivered" : null;
-      if (input.status !== next) throw new OfflineSalesError("INVALID_SALE", `Move this order from ${previousStatus} to ${next ?? "a terminal status"} first.`);
-      if (input.status === "shipped") {
+      const allowedNext: Record<string, string[]> = {
+        packing: ["shipped", "out_for_delivery", "delivered"],
+        shipped: ["out_for_delivery", "delivered"],
+        out_for_delivery: ["delivered"],
+        dispatched: ["delivered"],
+      };
+      if (!allowedNext[previousStatus]?.includes(input.status)) throw new OfflineSalesError("INVALID_SALE", `Cannot move this order from ${previousStatus} to ${input.status}. Choose a later delivery status.`);
+      const firstDispatchStatus = previousStatus === "packing" && ["shipped", "out_for_delivery", "delivered"].includes(input.status);
+      if (firstDispatchStatus) {
         const lines = sale.lines.filter((line) => line.productId);
         if (!sale.warehouseLocationId || lines.length !== sale.lines.length) throw new OfflineSalesError("INVALID_SALE", "This order is missing its warehouse or product mapping and cannot be dispatched.");
         if (await tx.select({ id: inventoryTransactions.id }).from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, `offline-sale-dispatch:${sale.id}`)).limit(1).then(rows => rows.length)) throw new OfflineSalesError("INVALID_SALE", "This order has already issued stock; contact a manager to review its status.");
@@ -453,7 +459,7 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
           if (!balance || balance.reserved < line.quantity || balance.onHand < line.quantity) throw new OfflineSalesError("INVALID_SALE", `${line.productName} no longer has enough reserved Retail stock to dispatch this order.`);
         }
         const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${uuid().slice(0, 8).toUpperCase()}`;
-        const [transaction] = await tx.insert(inventoryTransactions).values({ transactionNumber, type: "retail_issue", idempotencyKey: `offline-sale-dispatch:${sale.id}`, referenceId: sale.billingInvoiceNumber ?? sale.saleNumber, actorUsername: input.actorUsername, reason: "Sales order shipped from warehouse", occurredAt: new Date(), metadata: { destination: sale.customerName, offlineSaleId: sale.id, saleNumber: sale.saleNumber, billingInvoiceNumber: sale.billingInvoiceNumber, orderValuePaisa: sale.totalAmountPaisa, totalQuantity: lines.reduce((sum, line) => sum + line.quantity, 0), deliveryStatus: "shipped" } }).returning({ id: inventoryTransactions.id });
+        const [transaction] = await tx.insert(inventoryTransactions).values({ transactionNumber, type: "retail_issue", idempotencyKey: `offline-sale-dispatch:${sale.id}`, referenceId: sale.billingInvoiceNumber ?? sale.saleNumber, actorUsername: input.actorUsername, reason: `Sales order marked ${input.status.replaceAll("_", " ")} from warehouse`, occurredAt: new Date(), metadata: { destination: sale.customerName, offlineSaleId: sale.id, saleNumber: sale.saleNumber, billingInvoiceNumber: sale.billingInvoiceNumber, orderValuePaisa: sale.totalAmountPaisa, totalQuantity: lines.reduce((sum, line) => sum + line.quantity, 0), deliveryStatus: input.status } }).returning({ id: inventoryTransactions.id });
         const txLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
         for (const line of lines) {
           const balance = balanceByProduct.get(line.productId!)!;
