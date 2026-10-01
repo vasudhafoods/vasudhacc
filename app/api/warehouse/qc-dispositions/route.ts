@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WAREHOUSE_ACCESS = ["admin", "management", "warehouse_manager", "warehouse_staff"] as const;
-const TARGET_BUCKETS = ["online", "buffer", "damaged"] as const;
+const TARGET_BUCKETS = ["online", "retail", "buffer", "damaged"] as const;
 
 export async function POST(request: Request) {
   const session = await getDashboardSession();
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>;
     const toBucket = TARGET_BUCKETS.find((bucket) => bucket === body.toBucket);
-    if (!toBucket) return Response.json({ error: { code: "INVALID_TRANSFER", message: "Select Online, Buffer, or Damaged as the QC decision." } }, { status: 400 });
+    if (!toBucket) return Response.json({ error: { code: "INVALID_TRANSFER", message: "Select Online, Retail, Buffer, or Damaged as the QC decision." } }, { status: 400 });
     const result = await transferInventory({
       productId: String(body.productId ?? ""),
       warehouseLocationId: String(body.warehouseLocationId ?? ""),

@@ -7,9 +7,17 @@ export interface OfflineSaleRow {
   saleDate: string;
   customerName: string;
   customerContact: string | null;
+  billingInvoiceNumber: string | null;
+  billingAddress: string;
+  shippingAddress: string;
+  shippingSameAsBilling: boolean;
+  gstNumber: string | null;
   customerType: OfflineCustomerType;
   isNewB2bCustomer: boolean;
   totalAmountPaisa: number;
+  subtotalAmountPaisa: number;
+  discountPaisa: number;
+  taxPaisa: number;
   collectedAmountPaisa: number;
   pendingAmountPaisa: number;
   paymentStatus: OfflinePaymentStatus;
@@ -21,8 +29,16 @@ export interface OfflineSaleRow {
   deliveryPartner: string | null;
   deliveryCostPaisa: number | null;
   lrNumber: string | null;
-  lines: { productName: string; quantity: number; unitPricePaisa: number }[];
+  warehouseLocationId: string | null;
+  expectedNextPaymentDate: string | null;
+  lines: { productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[];
   createdBy: string;
+}
+
+export interface OfflineSalesEntryData {
+  products: { id: string; sku: string; name: string; category: "noodles" | "cookies" | "rte" | "other"; unitPricePaisa: number }[];
+  locations: { id: string; code: string; name: string }[];
+  retailBalances: { productId: string; warehouseLocationId: string; available: number }[];
 }
 
 export interface OfflineSalesOverview {

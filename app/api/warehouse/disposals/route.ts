@@ -23,12 +23,16 @@ export async function POST(request: Request) {
     if (!isBucket(body.sourceBucket)) return Response.json({ error: { code: "INVALID_DISPOSAL", message: "Select the stock bucket holding these packets." } }, { status: 400 });
     const disposalReason = DISPOSAL_REASONS.find((reason) => reason === body.disposalReason);
     if (!disposalReason) return Response.json({ error: { code: "INVALID_DISPOSAL", message: "Select a valid disposal reason." } }, { status: 400 });
+    const expiryRaw = String(body.expiryDate ?? "");
+    const expiryDate = new Date(`${expiryRaw}T12:00:00+05:30`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryRaw) || Number.isNaN(expiryDate.getTime())) throw new InventoryCommandError("INVALID_DISPOSAL", "Select a valid expiry date.");
     const result = await disposeInventory({
       productId: String(body.productId ?? ""),
       warehouseLocationId: String(body.warehouseLocationId ?? ""),
       sourceBucket: body.sourceBucket,
       quantity: Number(body.quantity),
       disposalReason,
+      expiryDate,
       referenceId: String(body.referenceId ?? ""),
       notes: body.notes ? String(body.notes) : undefined,
       actorUsername: session.username,

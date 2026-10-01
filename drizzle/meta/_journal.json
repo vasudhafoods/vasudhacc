@@ -43,6 +43,13 @@
       "when": 1790870400000,
       "tag": "0005_receipt_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790870400001,
+      "tag": "0006_sales_order_workflow",
+      "breakpoints": true
     }
   ]
 }

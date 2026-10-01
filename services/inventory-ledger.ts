@@ -108,6 +108,12 @@ export interface ReceiveReturnInput {
   channel: "retail" | "shopify";
   referenceId: string;
   reason: string;
+  orderType: "retail" | "shopify";
+  courier?: string;
+  rtoCostPaisa?: number;
+  manifestedAt?: Date;
+  receivedAt?: Date;
+  condition: "usable" | "damaged" | "missing" | "expired";
   notes?: string;
   actorUsername: string;
   idempotencyKey: string;
@@ -120,6 +126,8 @@ export interface ReceiveReturnResult {
   quantity: number;
   qcClosingBalance: number;
   channel: "retail" | "shopify";
+  condition: "usable" | "damaged" | "missing" | "expired";
+  stockBucket: "qc" | "damaged" | "retail" | null;
 }
 
 export interface DisposeInventoryInput {
@@ -128,6 +136,7 @@ export interface DisposeInventoryInput {
   sourceBucket: InventoryBucket;
   quantity: number;
   disposalReason: "expired" | "damaged" | "contaminated" | "quality_rejected" | "other";
+  expiryDate: Date;
   referenceId: string;
   notes?: string;
   actorUsername: string;
@@ -147,7 +156,7 @@ export interface DisposeInventoryResult {
 
 function validateTransfer(input: TransferInventoryInput) {
   if (input.fromBucket === input.toBucket) throw new InventoryCommandError("INVALID_TRANSFER", "Source and destination buckets must differ.");
-  if (input.toBucket === "retail") throw new InventoryCommandError("INVALID_TRANSFER", "New stock cannot be allocated to Retail.");
+  if (input.toBucket === "retail" && input.fromBucket !== "qc") throw new InventoryCommandError("INVALID_TRANSFER", "Only inspected QC stock can be released to Retail.");
   if (input.fromBucket === "online") throw new InventoryCommandError("INVALID_TRANSFER", "Moving stock out of Online is disabled until Shopify committed inventory is synchronized.");
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new InventoryCommandError("INVALID_TRANSFER", "Quantity must be a positive whole number.");
   if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_TRANSFER", "A valid idempotency key is required.");
@@ -211,6 +220,11 @@ function validateReturn(input: ReceiveReturnInput) {
   if (!input.productId.trim() || !input.warehouseLocationId.trim()) throw new InventoryCommandError("INVALID_RETURN", "Select a product and warehouse location.");
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new InventoryCommandError("INVALID_RETURN", "Return quantity must be a positive whole-packet number.");
   if (input.channel !== "retail" && input.channel !== "shopify") throw new InventoryCommandError("INVALID_RETURN", "Select Retail or Shopify as the return channel.");
+  if (input.orderType !== "retail" && input.orderType !== "shopify") throw new InventoryCommandError("INVALID_RETURN", "Select Retail or D2C as the order type.");
+  if (!(new Set(["usable", "damaged", "missing", "expired"])).has(input.condition)) throw new InventoryCommandError("INVALID_RETURN", "Select the returned item condition.");
+  if (input.rtoCostPaisa !== undefined && (!Number.isSafeInteger(input.rtoCostPaisa) || input.rtoCostPaisa < 0)) throw new InventoryCommandError("INVALID_RETURN", "Enter a valid non-negative RTO cost.");
+  if (input.manifestedAt && !Number.isFinite(input.manifestedAt.getTime())) throw new InventoryCommandError("INVALID_RETURN", "Enter a valid RTO manifested date.");
+  if (input.receivedAt && !Number.isFinite(input.receivedAt.getTime())) throw new InventoryCommandError("INVALID_RETURN", "Enter a valid RTO received date.");
   if (!input.referenceId.trim() || input.referenceId.trim().length > 100) throw new InventoryCommandError("INVALID_RETURN", "Enter a valid order, invoice, or return reference of 100 characters or fewer.");
   if (!input.reason.trim() || input.reason.trim().length > 200) throw new InventoryCommandError("INVALID_RETURN", "Enter a return reason of 200 characters or fewer.");
   if (!input.actorUsername.trim() || !input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_RETURN", "Actor and idempotency key are required.");
@@ -220,6 +234,7 @@ function validateReturn(input: ReceiveReturnInput) {
 function validateDisposal(input: DisposeInventoryInput) {
   if (!input.productId.trim() || !input.warehouseLocationId.trim()) throw new InventoryCommandError("INVALID_DISPOSAL", "Select a product and warehouse location.");
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new InventoryCommandError("INVALID_DISPOSAL", "Disposal quantity must be a positive whole-packet number.");
+  if (!Number.isFinite(input.expiryDate.getTime())) throw new InventoryCommandError("INVALID_DISPOSAL", "Enter a valid product expiry date.");
   if (!(["expired", "damaged", "contaminated", "quality_rejected", "other"] as const).includes(input.disposalReason)) throw new InventoryCommandError("INVALID_DISPOSAL", "Select a valid disposal reason.");
   if (!input.referenceId.trim() || input.referenceId.trim().length > 100) throw new InventoryCommandError("INVALID_DISPOSAL", "Enter a valid disposal reference of 100 characters or fewer.");
   if (!input.actorUsername.trim() || !input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_DISPOSAL", "Actor and idempotency key are required.");
@@ -314,10 +329,11 @@ export async function receiveReturnedStock(input: ReceiveReturnInput): Promise<R
     .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing) {
     if (existing.type !== "return") throw new InventoryCommandError("INVALID_RETURN", "This request key belongs to a different inventory operation.");
-    const [line] = await db.select({ quantity: inventoryTransactionLines.quantityDelta, closing: inventoryTransactionLines.closingBalance })
-      .from(inventoryTransactionLines).where(and(eq(inventoryTransactionLines.transactionId, existing.id), eq(inventoryTransactionLines.bucket, "qc"))).limit(1);
+    const [line] = await db.select({ quantity: inventoryTransactionLines.quantityDelta, closing: inventoryTransactionLines.closingBalance, bucket: inventoryTransactionLines.bucket })
+      .from(inventoryTransactionLines).where(eq(inventoryTransactionLines.transactionId, existing.id)).limit(1);
     const savedChannel = existing.metadata.channel === "shopify" ? "shopify" : "retail";
-    return { transactionId: existing.id, transactionNumber: existing.transactionNumber, duplicate: true, quantity: Math.abs(line?.quantity ?? input.quantity), qcClosingBalance: line?.closing ?? 0, channel: savedChannel };
+    const condition = existing.metadata.condition === "damaged" || existing.metadata.condition === "missing" || existing.metadata.condition === "expired" ? existing.metadata.condition : "usable";
+    return { transactionId: existing.id, transactionNumber: existing.transactionNumber, duplicate: true, quantity: Math.abs(line?.quantity ?? 0), qcClosingBalance: line?.closing ?? 0, channel: savedChannel, condition, stockBucket: line?.bucket === "qc" || line?.bucket === "damaged" ? line.bucket : null };
   }
 
   return db.transaction(async (tx) => {
@@ -328,16 +344,17 @@ export async function receiveReturnedStock(input: ReceiveReturnInput): Promise<R
       .where(and(eq(warehouseLocations.id, input.warehouseLocationId), eq(warehouseLocations.active, true))).limit(1);
     if (!location) throw new InventoryCommandError("NOT_FOUND", "The selected warehouse location is missing or inactive.");
 
-    await tx.insert(inventoryBalances).values({ productId: product.id, warehouseLocationId: location.id, bucket: "qc" })
+    const stockBucket = input.condition === "usable" ? input.orderType === "retail" ? "qc" : "qc" : input.condition === "missing" ? null : "damaged";
+    if (stockBucket) await tx.insert(inventoryBalances).values({ productId: product.id, warehouseLocationId: location.id, bucket: stockBucket })
       .onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
-    const [balance] = await tx.select().from(inventoryBalances).where(and(
+    const [balance] = stockBucket ? await tx.select().from(inventoryBalances).where(and(
       eq(inventoryBalances.productId, product.id),
       eq(inventoryBalances.warehouseLocationId, location.id),
-      eq(inventoryBalances.bucket, "qc"),
-    )).for("update");
-    if (!balance) throw new InventoryCommandError("NOT_FOUND", "The QC balance could not be created.");
+      eq(inventoryBalances.bucket, stockBucket),
+    )).for("update") : [];
+    if (stockBucket && !balance) throw new InventoryCommandError("NOT_FOUND", "The return stock balance could not be created.");
 
-    const closingBalance = balance.onHand + input.quantity;
+    const closingBalance = balance ? balance.onHand + input.quantity : 0;
     const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const [transaction] = await tx.insert(inventoryTransactions).values({
       transactionNumber,
@@ -346,21 +363,23 @@ export async function receiveReturnedStock(input: ReceiveReturnInput): Promise<R
       referenceId: input.referenceId.trim(),
       actorUsername: input.actorUsername,
       reason: input.reason.trim(),
-      metadata: { action: "return_received", channel: input.channel, notes: input.notes?.trim() || null, condition: "awaiting_qc", unit: "individual_packet" },
+      occurredAt: input.receivedAt ?? new Date(),
+      metadata: { action: "return_received", channel: input.channel, orderType: input.orderType, courier: input.courier?.trim() || null, rtoCostPaisa: input.rtoCostPaisa ?? null, manifestedAt: input.manifestedAt?.toISOString() ?? null, receivedAt: input.receivedAt?.toISOString() ?? null, condition: input.condition, notes: input.notes?.trim() || null, unit: "individual_packet" },
     }).returning({ id: inventoryTransactions.id });
-    await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() })
-      .where(eq(inventoryBalances.id, balance.id));
-    await tx.insert(inventoryTransactionLines).values({ transactionId: transaction.id, productId: product.id, warehouseLocationId: location.id, bucket: "qc", quantityDelta: input.quantity, openingBalance: balance.onHand, closingBalance });
+    if (balance && stockBucket) {
+      await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+      await tx.insert(inventoryTransactionLines).values({ transactionId: transaction.id, productId: product.id, warehouseLocationId: location.id, bucket: stockBucket, quantityDelta: input.quantity, openingBalance: balance.onHand, closingBalance });
+    }
     await tx.insert(auditEvents).values({
       actorUsername: input.actorUsername,
       action: "inventory.return_received",
       entityType: "inventory_transaction",
       entityId: transaction.id,
-      previousValue: { qc: balance.onHand },
-      newValue: { qc: closingBalance },
-      reason: `${input.channel === "shopify" ? "Shopify" : "Retail"} return ${input.referenceId.trim()} received into QC`,
+      previousValue: stockBucket && balance ? { [stockBucket]: balance.onHand } : {},
+      newValue: stockBucket ? { [stockBucket]: closingBalance } : {},
+      reason: `${input.orderType === "shopify" ? "D2C" : "Retail"} return ${input.referenceId.trim()} · ${input.condition}`,
     });
-    return { transactionId: transaction.id, transactionNumber, duplicate: false, quantity: input.quantity, qcClosingBalance: closingBalance, channel: input.channel };
+    return { transactionId: transaction.id, transactionNumber, duplicate: false, quantity: stockBucket ? input.quantity : 0, qcClosingBalance: stockBucket === "qc" ? closingBalance : 0, channel: input.channel, condition: input.condition, stockBucket };
   }, { isolationLevel: "serializable" });
 }
 
@@ -407,7 +426,7 @@ export async function disposeInventory(input: DisposeInventoryInput): Promise<Di
       referenceId: input.referenceId.trim(),
       actorUsername: input.actorUsername,
       reason: `Stock disposed: ${input.disposalReason.replaceAll("_", " ")}`,
-      metadata: { action: "disposal", sourceBucket: input.sourceBucket, disposalReason: input.disposalReason, notes: input.notes?.trim() || null, unit: "individual_packet" },
+      metadata: { action: "disposal", sourceBucket: input.sourceBucket, disposalReason: input.disposalReason, expiryDate: input.expiryDate.toISOString(), notes: input.notes?.trim() || null, unit: "individual_packet" },
     }).returning({ id: inventoryTransactions.id });
     await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() })
       .where(eq(inventoryBalances.id, balance.id));

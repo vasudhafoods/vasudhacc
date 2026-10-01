@@ -59,6 +59,11 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
   const [selectedSale, setSelectedSale] = useState<OfflineSaleRow | null>(null);
   const [collectionAmount, setCollectionAmount] = useState("");
   const [collectionReference, setCollectionReference] = useState("");
+  const [collectionMode, setCollectionMode] = useState("upi");
+  const [collectionTransactionId, setCollectionTransactionId] = useState("");
+  const [collectionReceiver, setCollectionReceiver] = useState("");
+  const [collectionNextDate, setCollectionNextDate] = useState("");
+  const [collectionProof, setCollectionProof] = useState<File | null>(null);
   const [collecting, setCollecting] = useState(false);
 
   const totalAmountPaisa = useMemo(() => decimal(draft.totalAmount), [draft.totalAmount]);
@@ -109,6 +114,14 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
       setError(`Enter a collection up to ${money(selectedSale.pendingAmountPaisa)}.`);
       return;
     }
+    if (!collectionProof || !collectionReceiver || (collectionMode !== "cash" && !collectionTransactionId)) {
+      setError("Enter payment mode and receiver, attach payment proof, and provide a transaction ID for non-cash payments.");
+      return;
+    }
+    if (amountPaisa < selectedSale.pendingAmountPaisa && !collectionNextDate) {
+      setError("Set the expected date for the next partial payment.");
+      return;
+    }
     setCollecting(true);
     setError(null);
     setSuccess(null);
@@ -116,15 +129,20 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
       const response = await fetch(`/api/offline-sales/${selectedSale.id}/collections`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ amount: collectionAmount, reference: collectionReference }),
+        body: JSON.stringify({ amount: collectionAmount, reference: collectionReference, paymentMode: collectionMode, paymentTransactionId: collectionTransactionId, paymentReceiverName: collectionReceiver, expectedNextPaymentDate: collectionNextDate || undefined, paymentProofFileName: collectionProof.name }),
       });
       const body = await response.json() as { result?: { sale?: OfflineSaleRow }; error?: { message?: string } };
       if (!response.ok || !body.result?.sale) throw new Error(body.error?.message ?? "Collection could not be saved.");
       const sale = body.result.sale;
+      const uploadForm = new FormData(); uploadForm.set("kind", "payment_proof"); uploadForm.set("file", collectionProof);
+      const uploadResponse = await fetch(`/api/offline-sales/${sale.id}/documents`, { method: "POST", body: uploadForm });
+      const uploaded = await uploadResponse.json() as { error?: { message?: string } };
+      if (!uploadResponse.ok) throw new Error(`Collection saved, but payment proof upload failed: ${uploaded.error?.message ?? "upload failed"}`);
       setSuccess(`Collection recorded for ${sale.customerName}. Remaining pending amount: ${money(sale.pendingAmountPaisa)}.`);
       setSelectedSale(null);
       setCollectionAmount("");
       setCollectionReference("");
+      setCollectionTransactionId(""); setCollectionReceiver(""); setCollectionNextDate(""); setCollectionProof(null);
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Collection could not be saved.");
@@ -163,7 +181,7 @@ export function OfflineSalesWorkspace({ overview, role }: { overview: OfflineSal
         <div className="mt-5 flex flex-col gap-3 border-t border-emerald-100 pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-slate-600">{totalAmountPaisa ? <>Sale: <strong>{money(totalAmountPaisa)}</strong> · Collected: <strong>{money(initialCollectionPaisa)}</strong> · Pending: <strong>{money(Math.max(0, totalAmountPaisa - initialCollectionPaisa))}</strong></> : "Enter the sale amount to see the collection summary."}</p><button type="submit" disabled={submitting || !canSubmit} className="h-11 rounded-lg bg-[#174f40] px-5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">{submitting ? "Saving sale…" : "Save offline sale"}</button></div>
       </form>
 
-      {selectedSale ? <form onSubmit={submitCollection} className="rounded-xl border border-blue-200 bg-blue-50 p-4 sm:flex sm:items-end sm:gap-4"><div className="min-w-0 flex-1"><p className="text-sm font-bold text-blue-950">Record collection from {selectedSale.customerName}</p><p className="mt-1 text-xs text-blue-800">Pending balance: {money(selectedSale.pendingAmountPaisa)}</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-blue-950">Amount received (₹)<input autoFocus inputMode="decimal" value={collectionAmount} onChange={(event) => { setCollectionAmount(event.target.value); setError(null); }} className={inputClass} placeholder="0.00" required/></label><label className="text-xs font-semibold text-blue-950">Receipt / UPI reference <span className="font-normal">optional</span><input value={collectionReference} onChange={(event) => setCollectionReference(event.target.value)} className={inputClass} placeholder="Reference number" maxLength={120}/></label></div></div><div className="mt-3 flex gap-2 sm:mt-0"><button type="button" onClick={() => { setSelectedSale(null); setCollectionAmount(""); setCollectionReference(""); }} className="h-11 rounded-lg border border-blue-200 bg-white px-4 text-sm font-bold text-blue-800">Cancel</button><button type="submit" disabled={collecting} className="h-11 rounded-lg bg-blue-700 px-4 text-sm font-bold text-white disabled:opacity-60">{collecting ? "Saving…" : "Record collection"}</button></div></form> : null}
+      {selectedSale ? <form onSubmit={submitCollection} className="rounded-xl border border-blue-200 bg-blue-50 p-4"><p className="text-sm font-bold text-blue-950">Record collection from {selectedSale.customerName}</p><p className="mt-1 text-xs text-blue-800">Pending balance: {money(selectedSale.pendingAmountPaisa)}</p><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"><label className="text-xs font-semibold text-blue-950">Amount received (₹)<input autoFocus inputMode="decimal" value={collectionAmount} onChange={(event) => { setCollectionAmount(event.target.value); setError(null); }} className={inputClass} placeholder="0.00" required/></label><label className="text-xs font-semibold text-blue-950">Payment mode<select value={collectionMode} onChange={e=>setCollectionMode(e.target.value)} className={inputClass}><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="cheque">Cheque</option><option value="other">Other</option></select></label><label className="text-xs font-semibold text-blue-950">Transaction ID<input value={collectionTransactionId} onChange={e=>setCollectionTransactionId(e.target.value)} className={inputClass} required={collectionMode!=="cash"}/></label><label className="text-xs font-semibold text-blue-950">Received by<input value={collectionReceiver} onChange={e=>setCollectionReceiver(e.target.value)} className={inputClass} required/></label><label className="text-xs font-semibold text-blue-950">Payment proof<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setCollectionProof(e.target.files?.[0]??null)} className={inputClass} required/></label><label className="text-xs font-semibold text-blue-950">Next payment date (if partial)<input type="date" value={collectionNextDate} onChange={e=>setCollectionNextDate(e.target.value)} className={inputClass}/></label><label className="text-xs font-semibold text-blue-950 sm:col-span-2">Receipt / UPI reference <span className="font-normal">optional</span><input value={collectionReference} onChange={(event) => setCollectionReference(event.target.value)} className={inputClass} placeholder="Reference number" maxLength={120}/></label></div><div className="mt-3 flex justify-end gap-2"><button type="button" onClick={() => { setSelectedSale(null); setCollectionAmount(""); setCollectionReference(""); }} className="h-11 rounded-lg border border-blue-200 bg-white px-4 text-sm font-bold text-blue-800">Cancel</button><button type="submit" disabled={collecting} className="h-11 rounded-lg bg-blue-700 px-4 text-sm font-bold text-white disabled:opacity-60">{collecting ? "Saving…" : "Record collection"}</button></div></form> : null}
 
       <div className="grid gap-5 xl:grid-cols-2">
         <SalesTable title="Sales in this period" subtitle={`${overview.salesCount} invoice${overview.salesCount === 1 ? "" : "s"} recorded in the selected date range.`} sales={overview.recentSales} onCollect={setSelectedSale}/>

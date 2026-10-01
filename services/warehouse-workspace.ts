@@ -7,6 +7,8 @@ import {
   inventoryBatches,
   inventoryTransactionLines,
   inventoryTransactions,
+  offlineSaleCollections,
+  offlineSales,
   products,
   shopifyMappings,
   warehouseLocations,
@@ -37,7 +39,7 @@ function productAuditActivity(row: typeof auditEvents.$inferSelect): WarehouseAc
 
 export async function getWarehouseWorkspaceData(actorUsername: string): Promise<WarehouseWorkspaceData> {
   const db = getDatabase();
-  const [productRows, mappingRows, locationRows, balanceRows, expiryRows, transactionRows, productAuditRows] = await Promise.all([
+  const [productRows, mappingRows, locationRows, balanceRows, expiryRows, transactionRows, productAuditRows, salesOrderData] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize, category: products.category, unitPricePaisa: products.unitPricePaisa })
       .from(products).where(eq(products.active, true)).orderBy(products.name, products.sku),
     db.select({ id: shopifyMappings.id, productId: shopifyMappings.productId, status: shopifyMappings.status })
@@ -61,6 +63,15 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     db.select().from(auditEvents)
       .where(and(eq(auditEvents.actorUsername, actorUsername), eq(auditEvents.action, "product.created")))
       .orderBy(desc(auditEvents.createdAt)).limit(12),
+    Promise.all([
+      db.select().from(offlineSales).where(inArray(offlineSales.deliveryStatus, ["packing", "shipped", "dispatched"])).orderBy(desc(offlineSales.saleDate)).limit(100),
+      db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
+    ]).then(([orders, paymentRows]) => ({ orders, paymentRows, migrationPending: false })).catch((error: unknown) => {
+      let cause = error as { code?: string; cause?: unknown };
+      while (cause && !cause.code && cause.cause) cause = cause.cause as { code?: string; cause?: unknown };
+      if (cause?.code !== "42703" && cause?.code !== "42P01") throw error;
+      return { orders: [], paymentRows: [], migrationPending: true };
+    }),
   ]);
 
   const mappingByProduct = new Map<string, string>();
@@ -192,7 +203,14 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     .filter((batch) => batch.remainingQuantity > 0)
     .sort((left, right) => left.expiryDate.localeCompare(right.expiryDate));
 
-  return { products: productOptions, locations: locationRows, retailBalances, balances, expiries, activities };
+  const collectedBySale = new Map<string, number>();
+  for (const collection of salesOrderData.paymentRows) collectedBySale.set(collection.offlineSaleId, (collectedBySale.get(collection.offlineSaleId) ?? 0) + collection.amountPaisa);
+  const salesOrders = salesOrderData.orders.map((sale) => {
+    const collected = Math.min(sale.totalAmountPaisa, collectedBySale.get(sale.id) ?? 0);
+    return { id: sale.id, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), customerName: sale.customerName, customerContact: sale.customerContact, billingInvoiceNumber: sale.billingInvoiceNumber, billingAddress: sale.billingAddress, shippingAddress: sale.shippingAddress, shippingSameAsBilling: sale.shippingSameAsBilling, gstNumber: sale.gstNumber, customerType: sale.customerType as "retail" | "b2b", isNewB2bCustomer: sale.isNewB2bCustomer, totalAmountPaisa: sale.totalAmountPaisa, subtotalAmountPaisa: sale.subtotalAmountPaisa, discountPaisa: sale.discountPaisa, taxPaisa: sale.taxPaisa, collectedAmountPaisa: collected, pendingAmountPaisa: sale.totalAmountPaisa - collected, paymentStatus: collected <= 0 ? "pending" as const : collected >= sale.totalAmountPaisa ? "paid" as const : "partial" as const, reference: sale.reference, notes: sale.notes, orderType: sale.orderType, location: sale.location, deliveryStatus: sale.deliveryStatus, deliveryPartner: sale.deliveryPartner, deliveryCostPaisa: sale.deliveryCostPaisa, lrNumber: sale.lrNumber, warehouseLocationId: sale.warehouseLocationId, expectedNextPaymentDate: sale.expectedNextPaymentDate, lines: sale.lines, createdBy: sale.createdBy };
+  });
+
+  return { products: productOptions, locations: locationRows, retailBalances, balances, expiries, activities, salesOrders, salesOrdersMigrationPending: salesOrderData.migrationPending };
 }
 
 export async function createWarehouseProduct(input: {

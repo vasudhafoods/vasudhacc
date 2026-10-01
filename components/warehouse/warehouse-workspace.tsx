@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { WarehouseReturnDisposal } from "@/components/warehouse/warehouse-return-disposal";
 import type { ShopifySyncStatus, WarehouseInventoryBucket, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
 type Panel = "dashboard" | "receive" | "dispatch" | "returns" | "disposal" | "product" | "activity";
@@ -474,6 +475,18 @@ export function WarehouseWorkspace({ user, initialData }: {
   }
 
   const inputClass = "h-12 w-full rounded-xl border border-slate-300 bg-white px-3.5 text-base text-slate-900 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
+  const [orderBusy, setOrderBusy] = useState<string | null>(null);
+  const [orderMessage, setOrderMessage] = useState("");
+  async function updateSalesOrder(saleId: string, status: string) {
+    setOrderBusy(saleId); setOrderMessage("");
+    try {
+      const response = await fetch(`/api/warehouse/offline-sales/${saleId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const body = await response.json() as { error?: { message?: string } };
+      if (!response.ok) throw new Error(body.error?.message ?? "Order status could not be updated.");
+      setOrderMessage(`Order updated to ${status}.`); router.refresh();
+    } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Order status could not be updated."); }
+    finally { setOrderBusy(null); }
+  }
 
   return <div className="space-y-6 pb-12">
     <section className="rounded-2xl bg-[#174f40] px-5 py-6 text-white shadow-sm sm:px-7">
@@ -487,8 +500,10 @@ export function WarehouseWorkspace({ user, initialData }: {
         ["dashboard", "1", "Stock dashboard", "View current inventory"],
         ["receive", "2", "Receive stock", "Enter a new delivery"],
         ["dispatch", "3", "Deliver stock", "Record an offline order"],
-        ["product", "4", "Add new product", "Create a product record"],
-        ["activity", "5", "My updates", "Check what you submitted"],
+        ["returns", "4", "Return on order", "Record RTO or customer returns"],
+        ["disposal", "5", "Disposal", "Record removed stock"],
+        ["product", "6", "Add new product", "Create a product record"],
+        ["activity", "7", "My updates", "Check what you submitted"],
       ] as const).map(([key, number, title, subtitle]) => <button key={key} type="button" onClick={() => changePanel(key)} className={`flex min-h-20 items-center gap-3 rounded-2xl border p-4 text-left transition ${panel === key ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
         <span className={`grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold ${panel === key ? "bg-[#174f40] text-white" : "bg-slate-100 text-slate-600"}`}>{number}</span>
         <span><span className="block text-sm font-bold text-slate-900">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{subtitle}</span></span>
@@ -497,7 +512,19 @@ export function WarehouseWorkspace({ user, initialData }: {
 
     {panel === "dashboard" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">View only</p><h2 className="mt-1 text-xl font-bold text-slate-950">Stock dashboard</h2><p className="mt-1 text-sm text-slate-500">Current inventory by product and warehouse. Stock changes are made through Receive stock or Deliver stock.</p></div>
-      <div className="p-5 sm:p-7">
+      <div className="space-y-6 p-5 sm:p-7">
+        <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-bold text-slate-900">Sales orders to prepare</h3><p className="mt-1 text-xs text-slate-600">Stock is reserved at order creation and issued from Retail stock when the order is marked dispatched.</p></div><span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{initialData.salesOrders.length} open</span></div>
+          {initialData.salesOrdersMigrationPending ? <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Sales order database updates are pending. Run <code className="font-bold">npm run db:migrate</code> and refresh to enable the warehouse order queue.</p> : null}
+          {orderMessage ? <p role="status" className="mt-3 rounded-lg bg-white p-3 text-sm text-slate-700">{orderMessage}</p> : null}
+          {initialData.salesOrders.length ? <div className="mt-4 space-y-3">{initialData.salesOrders.map(order => {
+            const next = order.deliveryStatus === "packing" ? "shipped" : order.deliveryStatus === "shipped" ? "dispatched" : "delivered";
+            return <article key={order.id} className="rounded-xl border border-blue-100 bg-white p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h4 className="font-bold text-slate-900">{order.customerName}</h4><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold capitalize text-slate-700">{order.deliveryStatus}</span></div><p className="mt-1 text-xs text-slate-500">Invoice {order.billingInvoiceNumber ?? order.saleNumber} · {order.saleNumber} · {order.location ?? "Retail order"}</p><p className="mt-1 text-xs text-slate-600">Ship to: {order.shippingAddress} · GSTIN: {order.gstNumber ?? "Not provided"}</p></div><p className="font-bold text-slate-900">₹{(order.totalAmountPaisa/100).toLocaleString("en-IN",{minimumFractionDigits:2})}</p></div>
+              <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">{order.lines.map((line,index)=><p key={`${order.id}-${index}`} className="rounded-lg bg-slate-50 px-3 py-2">{line.productName} · {line.sku ?? ""} × {line.quantity} · {line.gstRateBps ? `${line.gstRateBps/100}% GST` : ""}</p>)}</div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><a className="font-semibold text-blue-700 underline" href={`/api/offline-sales/${order.id}/documents`} target="_blank" rel="noreferrer">View invoice / payment documents</a><div className="flex gap-2"><button type="button" disabled={orderBusy===order.id} onClick={()=>updateSalesOrder(order.id,"cancelled")} className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700 disabled:opacity-50">Cancel order</button><button type="button" disabled={orderBusy===order.id} onClick={()=>updateSalesOrder(order.id,next)} className="rounded-lg bg-[#174f40] px-4 py-2 text-xs font-bold capitalize text-white disabled:opacity-50">{orderBusy===order.id?"Updating…":`Mark ${next}`}</button></div></div>
+            </article>;
+          })}</div> : <p className="mt-4 rounded-lg border border-dashed border-blue-200 bg-white p-6 text-center text-sm text-slate-500">No sales orders are waiting for warehouse preparation.</p>}
+        </section>
         <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Category / product</th><th className="px-4 py-3">Warehouse</th><th className="px-4 py-3 text-right">Shopify</th><th className="px-4 py-3 text-right">Retail</th><th className="px-4 py-3 text-right">Buffer</th><th className="px-4 py-3 text-right">Damaged</th><th className="px-4 py-3 text-right">QC / hold</th><th className="px-4 py-3 text-right">Total units</th><th className="px-4 py-3 text-right">Stock value</th><th className="px-4 py-3">Expiry / batch</th></tr></thead><tbody>
           {initialData.products.flatMap((product) => initialData.locations.map((location) => {
             const get = (bucket: WarehouseInventoryBucket) => initialData.balances.find((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id && balance.bucket === bucket)?.onHand ?? 0;
@@ -628,6 +655,9 @@ export function WarehouseWorkspace({ user, initialData }: {
         </div> : null}
       </div>
     </section> : null}
+
+    {panel === "returns" ? <WarehouseReturnDisposal kind="return" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries}/> : null}
+    {panel === "disposal" ? <WarehouseReturnDisposal kind="disposal" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries}/> : null}
 
     {panel === "product" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{productStep === "edit" ? "Step 1 of 2 · Enter" : productStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{productStep === "success" ? "Product created successfully" : "Add a new product"}</h2><p className="mt-1 text-sm text-slate-500">Use this only when the SKU is not already in the product list.</p></div>

@@ -32,8 +32,8 @@ export function Sidebar({ mobile = false, role }: { mobile?: boolean; role?: Das
         <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-900">Receive stock, add products, review, and submit. Your updates are recorded under your username.</div>
       </> : retailSalesOnly ? <>
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-400">Sales</p>
-        <Link href="/sales" className="mb-1 flex items-center gap-3 rounded-lg bg-[#eaf3ef] px-3 py-3 text-sm font-semibold text-[#164c3d]"><Icon name="sales" className="size-[18px]"/>Shopify sales</Link>
-        <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/70 p-3 text-xs leading-5 text-blue-950">Review Shopify sales and orders.</div>
+        <Link href="/sales" className="mb-1 flex items-center gap-3 rounded-lg bg-[#eaf3ef] px-3 py-3 text-sm font-semibold text-[#164c3d]"><Icon name="sales" className="size-[18px]"/>Raise retail order</Link>
+        <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/70 p-3 text-xs leading-5 text-blue-950">Create customer invoices and track warehouse fulfillment and payments.</div>
       </> : <>
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-400">Overview</p>
         {primary.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} href={item.href} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${active ? "bg-[#eaf3ef] text-[#164c3d]" : "text-slate-600 hover:bg-slate-50"}`}><Icon name={item.icon} className="size-[18px]"/>{item.label}</Link>; })}

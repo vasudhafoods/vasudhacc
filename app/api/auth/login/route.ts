@@ -7,14 +7,15 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const username = String(formData.get("username") ?? "").trim().slice(0, 200);
   const password = String(formData.get("password") ?? "").slice(0, 500);
-  const portal = formData.get("portal") === "warehouse" ? "warehouse" : "admin";
+  const requestedPortal = formData.get("portal");
+  const portal = requestedPortal === "warehouse" || requestedPortal === "sales" ? requestedPortal : "admin";
   const loginUrl = (error: string) => new URL(`/login?error=${error}&portal=${portal}`, request.url);
 
   if (!isDashboardAuthConfigured()) {
     return NextResponse.redirect(loginUrl("configuration"), 303);
   }
   const user = await authenticateDashboardCredentials(username, password);
-  const portalMatchesRole = user && (portal === "warehouse" ? isWarehouseRole(user.role) || isRetailSalesRole(user.role) : isManagementRole(user.role));
+  const portalMatchesRole = user && (portal === "warehouse" ? isWarehouseRole(user.role) : portal === "sales" ? isRetailSalesRole(user.role) : isManagementRole(user.role));
   if (!user || !portalMatchesRole) {
     return NextResponse.redirect(loginUrl("credentials"), 303);
   }

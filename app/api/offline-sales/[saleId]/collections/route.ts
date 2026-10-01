@@ -24,6 +24,11 @@ export async function POST(request: Request, context: { params: Promise<{ saleId
       amountPaisa: rupeesToPaisa(body.amount),
       reference: body.reference ? String(body.reference) : undefined,
       notes: body.notes ? String(body.notes) : undefined,
+      paymentMode: String(body.paymentMode ?? ""),
+      paymentTransactionId: body.paymentTransactionId ? String(body.paymentTransactionId) : undefined,
+      paymentReceiverName: String(body.paymentReceiverName ?? ""),
+      paymentProofFileName: String(body.paymentProofFileName ?? ""),
+      expectedNextPaymentDate: body.expectedNextPaymentDate ? String(body.expectedNextPaymentDate) : undefined,
       actorUsername: session.username,
       idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "",
     });

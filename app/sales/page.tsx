@@ -4,11 +4,20 @@ import { getInventoryFeed } from "@/lib/inventory/live-data";
 import { resolveSalesDateRange } from "@/lib/sales/date-range";
 import { fetchSalesReport } from "@/services/shopify-sales";
 import type { SalesReport } from "@/types/sales";
+import { OfflineSalesWorkspace } from "@/components/sales/offline-sales-workspace";
+import { SalesOrderWorkspace } from "@/components/sales/sales-order-workspace";
+import { getOfflineSalesEntryData, getOfflineSalesOverview } from "@/services/offline-sales";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
 const money = (value: number, currency: string) => new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
 type MaybeReport = { report: SalesReport | null; error: string | null };
+
+function indiaToday(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((value) => value.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
 
 async function readShopifySales(range: { from: string; to: string }): Promise<MaybeReport> {
   try { return { report: await fetchSalesReport(range), error: null }; }
@@ -34,8 +43,17 @@ function change(current: number, previous: number): number | null {
 }
 
 export default async function SalesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  await requireSalesSession();
+  const session = await requireSalesSession();
   await connection();
+  const today = indiaToday();
+  if (session.role === "retail_sales") {
+    const [overview, entryData] = await Promise.all([
+      getOfflineSalesOverview({ from: today, to: today }),
+      getOfflineSalesEntryData(),
+    ]);
+    return <SalesOrderWorkspace overview={overview} entryData={entryData}/>;
+  }
+  const offlineOverview = await getOfflineSalesOverview({ from: today, to: today });
   const range = resolveSalesDateRange(await searchParams);
   const result = await loadSales(range.current, range.previous);
   const report = result.report.report;
@@ -52,6 +70,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const previousCancellationRate = previous?.orders ? previous.cancelledOrders / previous.orders * 100 : 0;
 
   return <div className="space-y-6">
+    <OfflineSalesWorkspace overview={offlineOverview} role={session.role}/>
     <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div><p className="text-xs font-medium text-[#2d725f]">Commerce intelligence</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Sales analytics</h1><p className="mt-1 text-sm text-slate-500">Shopify sales for {range.label}, compared with {range.previousLabel}.</p></div><DateFilter range={range}/></div>
 
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

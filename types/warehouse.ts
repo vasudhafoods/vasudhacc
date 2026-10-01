@@ -49,4 +49,6 @@ export interface WarehouseWorkspaceData {
   balances: WarehouseBucketBalance[];
   expiries: { productId: string; warehouseLocationId: string; batchNumber: string; expiryDate: string; remainingQuantity: number }[];
   activities: WarehouseActivity[];
+  salesOrders: import("@/types/offline-sales").OfflineSaleRow[];
+  salesOrdersMigrationPending: boolean;
 }
