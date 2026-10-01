@@ -10,7 +10,6 @@ interface ShopifyOrderNode {
   name: string;
   createdAt: string;
   totalPriceSet: { shopMoney: Money };
-  customer: { firstName: string | null; lastName: string | null; displayName: string } | null;
   shippingAddress: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
   lineItems: { nodes: { title: string; sku: string | null; quantity: number; currentQuantity: number }[] };
   fulfillmentOrders: { nodes: { id: string; status: string; lineItems: { nodes: { remainingQuantity: number }[] } }[] };
@@ -23,7 +22,7 @@ function mapOrder(order: ShopifyOrderNode): ShopifyWarehouseOrder {
     id: order.id,
     name: order.name,
     createdAt: order.createdAt,
-    customerName: order.customer?.displayName || [order.customer?.firstName, order.customer?.lastName].filter(Boolean).join(" ") || address?.name || "Shopify customer",
+    customerName: address?.name || "Shopify customer",
     destination: [address?.address1, address?.address2, address?.city, address?.province, address?.zip, address?.country].filter(Boolean).join(", "),
     total: order.totalPriceSet.shopMoney.amount,
     currency: order.totalPriceSet.shopMoney.currencyCode,

@@ -115,7 +115,6 @@ export const WAREHOUSE_ORDERS_QUERY = `#graphql
         createdAt
         displayFinancialStatus
         totalPriceSet { shopMoney { amount currencyCode } }
-        customer { firstName lastName displayName }
         shippingAddress { name address1 address2 city province zip country }
         lineItems(first: 100) { nodes { title sku quantity currentQuantity } }
         fulfillmentOrders(first: 20) {
