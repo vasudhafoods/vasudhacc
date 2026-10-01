@@ -131,7 +131,12 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
                   <td className="px-3 py-3">{order.deliveryStatus ? <span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${deliveryTone}`}>{displayShopifyStatus(order.deliveryStatus)}</span> : <span className="text-slate-400">—</span>}</td>
                   <td className="max-w-48 px-3 py-3">{order.trackingInfo.length ? <div className="space-y-1">{order.trackingInfo.map((info, index) => <div key={`${order.id}-tracking-${index}`}><span className="block text-[11px] text-slate-500">{info.company || "Carrier"}</span>{info.url ? <a className="break-all font-semibold text-blue-700 underline" href={info.url} target="_blank" rel="noreferrer">{info.number || "Open tracking"}</a> : <span className="break-all font-semibold text-slate-800">{info.number || "—"}</span>}</div>)}</div> : <span className="text-slate-400">—</span>}</td>
                   <td className="max-w-40 px-3 py-3 text-slate-600">{order.sourceName}</td>
-                  <td className="px-3 py-3 text-slate-700">{order.itemCount}</td>
+                  <td className="min-w-64 max-w-80 px-3 py-3 text-slate-700">
+                    <p className="mb-1 text-xs font-semibold text-slate-500">{order.itemCount} {order.itemCount === 1 ? "unit" : "units"}</p>
+                    {order.lines.length ? <ul className="space-y-1">{order.lines.map((line, index) => <li key={`${order.id}-item-${index}`} className="text-xs leading-5">
+                      <span className="font-medium text-slate-800">{line.title}</span>{line.variantTitle ? <span className="text-slate-500"> · {line.variantTitle}</span> : null}{line.sku ? <span className="text-slate-500"> · {line.sku}</span> : null}<span className="font-semibold text-slate-700"> × {line.quantity}</span>
+                    </li>)}</ul> : <span className="text-slate-400">—</span>}
+                  </td>
                 </tr>;
               })}
               {!visibleShopifyOrders.length ? <tr><td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">{shopifyOrders.length ? "No orders match this search or filter." : "No Shopify orders found."}</td></tr> : null}

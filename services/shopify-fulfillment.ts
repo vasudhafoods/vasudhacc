@@ -14,7 +14,7 @@ interface ShopifyOrderNode {
   displayFulfillmentStatus: string;
   totalPriceSet: { shopMoney: Money };
   shippingAddress: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
-  lineItems: { nodes: { currentQuantity: number }[] };
+  lineItems: { nodes: { title: string; variantTitle: string | null; sku: string | null; quantity: number; currentQuantity: number }[] };
   fulfillments: { updatedAt: string; displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[];
 }
 interface OrdersResponse { orders: { nodes: ShopifyOrderNode[]; pageInfo: ShopifyPageInfo } }
@@ -43,6 +43,14 @@ function mapOrder(order: ShopifyOrderNode): ShopifyWarehouseOrder {
     sourceName: order.attribution?.displayName || "Shopify",
     trackingInfo,
     itemCount: order.lineItems.nodes.reduce((total, line) => total + Math.max(0, line.currentQuantity), 0),
+    lines: order.lineItems.nodes
+      .filter((line) => line.currentQuantity > 0)
+      .map((line) => ({
+        title: line.title,
+        variantTitle: line.variantTitle,
+        sku: line.sku,
+        quantity: line.currentQuantity,
+      })),
   };
 }
 

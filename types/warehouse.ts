@@ -70,4 +70,5 @@ export interface ShopifyWarehouseOrder {
   sourceName: string;
   trackingInfo: { company: string | null; number: string | null; url: string | null }[];
   itemCount: number;
+  lines: { title: string; variantTitle: string | null; sku: string | null; quantity: number }[];
 }
