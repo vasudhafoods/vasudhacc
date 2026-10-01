@@ -20,9 +20,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
   if (session && isWarehouseRole(session.role)) {
-    if (pathname === "/warehouse" || pathname.startsWith("/warehouse/") || pathname.startsWith("/api/warehouse/")) return NextResponse.next();
+    const isOfflineSalesDocumentRoute = /^\/api\/offline-sales\/[^/]+\/documents(?:\/[^/]+)?$/.test(pathname);
+    if (pathname === "/warehouse" || pathname.startsWith("/warehouse/") || pathname.startsWith("/api/warehouse/") || isOfflineSalesDocumentRoute) return NextResponse.next();
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: { code: "FORBIDDEN", message: "Warehouse access is limited to stock intake, retail dispatches, and product creation." } }, { status: 403 });
+      return NextResponse.json({ error: { code: "FORBIDDEN", message: "Warehouse access is limited to warehouse operations and assigned retail order documents." } }, { status: 403 });
     }
     return NextResponse.redirect(new URL("/warehouse", request.url));
   }
