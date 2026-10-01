@@ -28,6 +28,7 @@ export interface OfflineSaleRow {
   requestedDispatchDate?: string | null;
   location: string | null;
   deliveryStatus: string;
+  deliveredAt: string | null;
   deliveryPartner: string | null;
   deliveryCostPaisa: number | null;
   lrNumber: string | null;
@@ -62,4 +63,5 @@ export interface OfflineSalesOverview {
   salesCount: number;
   recentSales: OfflineSaleRow[];
   outstandingSales: OfflineSaleRow[];
+  submittedOrders?: OfflineSaleRow[];
 }

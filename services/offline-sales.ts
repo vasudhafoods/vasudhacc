@@ -70,6 +70,7 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     requestedDispatchDate: sale.requestedDispatchDate,
     location: sale.location,
     deliveryStatus: sale.deliveryStatus,
+    deliveredAt: sale.deliveredAt?.toISOString() ?? null,
     deliveryPartner: sale.deliveryPartner,
     deliveryCostPaisa: sale.deliveryCostPaisa,
     lrNumber: sale.lrNumber,
@@ -129,13 +130,13 @@ function mapCollections(rows: { offlineSaleId: string; amountPaisa: number }[]):
   return amounts;
 }
 
-export async function getOfflineSalesOverview(range: { from: string; to: string }): Promise<OfflineSalesOverview> {
+export async function getOfflineSalesOverview(range: { from: string; to: string }, options?: { createdBy?: string }): Promise<OfflineSalesOverview> {
   const from = rangeBoundary(range.from, "start");
   const to = rangeBoundary(range.to, "end");
   if (from > to) throw new OfflineSalesError("INVALID_SALE", "The reporting start date must be before the end date.");
   const db = getDatabase();
   const [allSales, allCollections, periodSales, periodCollections] = await Promise.all([
-    db.select().from(offlineSales),
+    db.select().from(offlineSales).orderBy(desc(offlineSales.saleDate)),
     db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
     db.select().from(offlineSales).where(and(gte(offlineSales.saleDate, from), lte(offlineSales.saleDate, to))).orderBy(desc(offlineSales.saleDate)),
     db.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(and(gte(offlineSaleCollections.collectedAt, from), lte(offlineSaleCollections.collectedAt, to))),
@@ -154,6 +155,7 @@ export async function getOfflineSalesOverview(range: { from: string; to: string 
     salesCount: periodRows.length,
     recentSales: periodRows.slice(0, 20),
     outstandingSales: outstandingSales.slice(0, 12),
+    ...(options?.createdBy ? { submittedOrders: allRows.filter((sale) => sale.createdBy === options.createdBy) } : {}),
   };
 }
 
@@ -470,7 +472,8 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
         if (txLines.length) await tx.insert(inventoryTransactionLines).values(txLines);
       }
     }
-    await tx.update(offlineSales).set({ deliveryStatus: input.status, deliveryPartner: deliveryPartner || sale.deliveryPartner, lrNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl, updatedAt: new Date() }).where(eq(offlineSales.id, sale.id));
+    const updatedAt = new Date();
+    await tx.update(offlineSales).set({ deliveryStatus: input.status, deliveredAt: input.status === "delivered" ? sale.deliveredAt ?? updatedAt : sale.deliveredAt, deliveryPartner: deliveryPartner || sale.deliveryPartner, lrNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl, updatedAt }).where(eq(offlineSales.id, sale.id));
     await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "offline_sale.delivery_status_updated", entityType: "offline_sale", entityId: sale.id, previousValue: { deliveryStatus: previousStatus, deliveryPartner: sale.deliveryPartner, lrNumber: sale.lrNumber, trackingUrl: sale.trackingUrl }, newValue: { deliveryStatus: input.status, deliveryPartner: deliveryPartner || sale.deliveryPartner, trackingNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl }, reason: input.status === "cancelled" ? "Sales order cancelled; reserved Retail stock released" : "Warehouse fulfillment status and tracking updated" });
     return { saleNumber: sale.saleNumber, status: input.status, duplicate: false };
   });

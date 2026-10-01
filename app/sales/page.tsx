@@ -48,7 +48,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   const today = indiaToday();
   if (session.role === "retail_sales") {
     const [overview, entryData] = await Promise.all([
-      getOfflineSalesOverview({ from: today, to: today }),
+      getOfflineSalesOverview({ from: today, to: today }, { createdBy: session.username }),
       getOfflineSalesEntryData(),
     ]);
     return <SalesOrderWorkspace overview={overview} entryData={entryData}/>;

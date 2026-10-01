@@ -229,6 +229,7 @@ export const offlineSales = pgTable("offline_sales", {
   orderType: text("order_type").default("retail").notNull(),
   requestedDispatchDate: text("requested_dispatch_date"),
   deliveryStatus: text("delivery_status").default("packing").notNull(),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
   location: text("location"),
   deliveryPartner: text("delivery_partner"),
   deliveryCostPaisa: integer("delivery_cost_paisa"),

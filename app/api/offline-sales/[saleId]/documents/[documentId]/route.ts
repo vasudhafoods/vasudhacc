@@ -15,5 +15,5 @@ export async function GET(_request: Request, { params }: { params: Promise<{ sal
   const { saleId, documentId } = await params;
   const [document] = await getDatabase().select().from(offlineSaleDocuments).where(and(eq(offlineSaleDocuments.id, documentId), eq(offlineSaleDocuments.offlineSaleId, saleId))).limit(1);
   if (!document) return Response.json({ error: { message: "Sales document not found." } }, { status: 404 });
-  return new Response(Buffer.from(document.contentBase64, "base64"), { headers: { "Content-Type": document.contentType, "Content-Length": String(document.fileSize), "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(document.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
+  return new Response(Buffer.from(document.contentBase64, "base64"), { headers: { "Content-Type": document.contentType, "Content-Length": String(document.fileSize), "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(document.fileName)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
 }

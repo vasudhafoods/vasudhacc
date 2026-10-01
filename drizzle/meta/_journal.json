@@ -78,6 +78,13 @@
       "when": 1790895900000,
       "tag": "0010_delivery_proof_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790896800000,
+      "tag": "0011_offline_sales_delivered_at",
+      "breakpoints": true
     }
   ]
 }

@@ -8,7 +8,9 @@ import type { ShopifyWarehouseOrder } from "@/types/warehouse";
 type Status = "packing" | "shipped" | "out_for_delivery" | "delivered";
 type OrderDocument = { fileName: string; url: string };
 type OrderDocumentKind = "tracking_slip" | "proof_of_delivery";
+type OrderDocumentView = OrderDocument & { kind: string; contentType: string; createdAt: string };
 type ShopifyOrderFilter = "all" | "unfulfilled" | "partially_fulfilled" | "fulfilled";
+type OrderTab = "shopify" | "retail";
 
 function displayShopifyStatus(value: string | null | undefined): string {
   if (!value) return "—";
@@ -52,10 +54,15 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
   const [tracking, setTracking] = useState<Record<string, string>>({});
   const [trackingUrl, setTrackingUrl] = useState<Record<string, string>>({});
   const [selectedDocuments, setSelectedDocuments] = useState<Record<string, File | null>>({});
+  const [expandedDocuments, setExpandedDocuments] = useState<Record<string, boolean>>({});
+  const [orderDocumentLists, setOrderDocumentLists] = useState<Record<string, OrderDocumentView[]>>({});
+  const [loadingDocuments, setLoadingDocuments] = useState<Record<string, boolean>>({});
+  const [documentErrors, setDocumentErrors] = useState<Record<string, string>>({});
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
   const [savedStatuses, setSavedStatuses] = useState<Record<string, string>>({});
   const [shopifySearch, setShopifySearch] = useState("");
   const [shopifyFilter, setShopifyFilter] = useState<ShopifyOrderFilter>("all");
+  const [activeOrderTab, setActiveOrderTab] = useState<OrderTab>("shopify");
 
   async function updateRetail(order: OfflineSaleRow) {
     const currentStatus = savedStatuses[order.id] ?? order.deliveryStatus;
@@ -90,6 +97,28 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
     finally { setBusy(""); }
   }
 
+  async function toggleOrderDocuments(order: OfflineSaleRow) {
+    const orderId = order.id;
+    if (expandedDocuments[orderId]) {
+      setExpandedDocuments((old) => ({ ...old, [orderId]: false }));
+      return;
+    }
+    setExpandedDocuments((old) => ({ ...old, [orderId]: true }));
+    setDocumentErrors((old) => ({ ...old, [orderId]: "" }));
+    if (orderDocumentLists[orderId]) return;
+    setLoadingDocuments((old) => ({ ...old, [orderId]: true }));
+    try {
+      const response = await fetch(`/api/offline-sales/${orderId}/documents`, { cache: "no-store" });
+      const body = await response.json() as { files?: OrderDocumentView[]; error?: { message?: string } };
+      if (!response.ok) throw new Error(body.error?.message ?? "Order documents could not be loaded.");
+      setOrderDocumentLists((old) => ({ ...old, [orderId]: body.files ?? [] }));
+    } catch (error) {
+      setDocumentErrors((old) => ({ ...old, [orderId]: error instanceof Error ? error.message : "Order documents could not be loaded." }));
+    } finally {
+      setLoadingDocuments((old) => ({ ...old, [orderId]: false }));
+    }
+  }
+
   const inputClass = "h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
   const fileChange = (orderId: string, kind: OrderDocumentKind) => (event: ChangeEvent<HTMLInputElement>) => setSelectedDocuments((current) => ({ ...current, [`${orderId}:${kind}`]: event.target.files?.[0] ?? null }));
   const visibleShopifyOrders = useMemo(() => {
@@ -106,11 +135,20 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
   }, [shopifyOrders, shopifySearch, shopifyFilter]);
 
   return <section className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
-    <header><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Warehouse desk</p><h2 className="mt-1 text-2xl font-bold text-slate-950">Orders</h2><p className="mt-1 text-sm text-slate-500">Fulfill Shopify shipments in Delhivery. Refresh here to see tracking and delivery details synced to Shopify. Retail orders from Sales are updated below.</p></header>
+    <header><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Warehouse desk</p><h2 className="mt-1 text-2xl font-bold text-slate-950">Orders</h2><p className="mt-1 text-sm text-slate-500">Switch between Shopify shipments and Retail orders from Sales. Shopify tracking updates appear here after syncing from Delhivery.</p></header>
     {message ? <p role={messageError ? "alert" : "status"} aria-live="polite" className={`rounded-lg border p-3 text-sm ${messageError ? "border-rose-200 bg-rose-50 text-rose-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}>{message}</p> : null}
     {migrationPending ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Sales order database updates are pending. Run <code className="font-bold">npm run db:migrate</code> and refresh.</p> : null}
 
-    <section className="space-y-3">
+    <div role="tablist" aria-label="Order type" className="flex gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1.5">
+      <button type="button" role="tab" aria-selected={activeOrderTab === "shopify"} onClick={() => setActiveOrderTab("shopify")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition ${activeOrderTab === "shopify" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>
+        Shopify <span className="ml-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs text-violet-800">{shopifyOrders.length}</span>
+      </button>
+      <button type="button" role="tab" aria-selected={activeOrderTab === "retail"} onClick={() => setActiveOrderTab("retail")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition ${activeOrderTab === "retail" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>
+        Retail <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">{salesOrders.length}</span>
+      </button>
+    </div>
+
+    {activeOrderTab === "shopify" ? <section role="tabpanel" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div><h3 className="text-lg font-bold text-slate-900">Shopify orders</h3><p className="text-xs text-slate-500">Latest 50 orders, including fulfillment and tracking updates from Shopify.</p></div>
         <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-800">{shopifyOrders.length} orders</span>
@@ -155,9 +193,9 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
           </table>
         </div>
       </>}
-    </section>
+    </section> : null}
 
-    <section className="space-y-3 border-t border-slate-100 pt-5"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-lg font-bold text-slate-900">Retail orders from Sales</h3><p className="text-xs text-slate-500">Stock is issued when an order is marked shipped.</p></div><span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{salesOrders.filter((order) => !["delivered", "cancelled"].includes(order.deliveryStatus)).length} active · {salesOrders.length} total</span></div>
+    {activeOrderTab === "retail" ? <section role="tabpanel" className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-lg font-bold text-slate-900">Retail orders from Sales</h3><p className="text-xs text-slate-500">Stock is issued when an order is marked shipped.</p></div><span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{salesOrders.filter((order) => !["delivered", "cancelled"].includes(order.deliveryStatus)).length} active · {salesOrders.length} total</span></div>
       {salesOrders.length ? salesOrders.map((order) => {
         const savedStatus = savedStatuses[order.id] ?? order.deliveryStatus;
         const status = statuses[order.id] ?? (savedStatus === "dispatched" ? "delivered" : savedStatus as Status);
@@ -168,16 +206,19 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
         const currentProof = selectedDocuments[proofKey];
         const existingSlip = documents[trackingKey];
         const existingProof = documents[proofKey];
-        return <article key={order.id} className="rounded-xl border border-violet-100 bg-violet-50/40 p-4"><div className="flex flex-wrap justify-between gap-3"><div><h4 className="font-bold text-slate-900">{order.billingInvoiceNumber ?? order.saleNumber} · {order.customerName}</h4><p className="mt-1 text-xs text-slate-500">{new Date(order.saleDate).toLocaleDateString("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" })} · {order.shippingAddress || "No shipping address"}</p><p className="mt-1 text-sm font-semibold">₹{(order.totalAmountPaisa / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</p></div><div className="flex h-fit flex-wrap items-center gap-2"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold capitalize text-violet-900">{savedStatus.replaceAll("_", " ")}</span>{order.requestedDispatchDate ? <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">Dispatch by {new Date(`${order.requestedDispatchDate}T12:00:00+05:30`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}</span> : null}</div></div>
+        return <article key={order.id} className="rounded-xl border border-violet-100 bg-violet-50/40 p-4"><div className="flex flex-wrap justify-between gap-3"><div><h4 className="font-bold text-slate-900">{order.billingInvoiceNumber ?? order.saleNumber} · {order.customerName}</h4><p className="mt-1 text-xs text-slate-500">{new Date(order.saleDate).toLocaleDateString("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" })} · {order.shippingAddress || "No shipping address"}</p><p className="mt-1 text-sm font-semibold">₹{(order.totalAmountPaisa / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</p>{savedStatus === "delivered" && order.deliveredAt ? <p className="mt-1 text-sm font-semibold text-emerald-800">Delivered on {new Date(order.deliveredAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" })}</p> : null}</div><div className="flex h-fit flex-wrap items-center gap-2"><span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-semibold capitalize text-violet-900">{savedStatus.replaceAll("_", " ")}</span>{order.requestedDispatchDate ? <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">Dispatch by {new Date(`${order.requestedDispatchDate}T12:00:00+05:30`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}</span> : null}</div></div>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">{order.lines.map((line, index) => <p key={`${order.id}-${index}`} className="rounded-lg bg-white px-3 py-2 text-xs text-slate-700">{line.productName} × {line.quantity}</p>)}</div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><label className="text-xs font-semibold text-slate-600">Delivery status<select className={inputClass} disabled={terminal} value={status} onChange={(event) => setStatuses((old) => ({ ...old, [order.id]: event.target.value as Status }))}>{order.deliveryStatus === "cancelled" ? <option value="cancelled">Cancelled</option> : null}<option value="packing">Packed</option><option value="shipped">Shipped</option><option value="out_for_delivery">Out for delivery</option><option value="delivered">Delivered</option></select></label><label className="text-xs font-semibold text-slate-600">Delivery partner<input className={inputClass} disabled={terminal} value={carrier[order.id] ?? order.deliveryPartner ?? ""} onChange={(event) => setCarrier((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="Courier / carrier"/></label><label className="text-xs font-semibold text-slate-600">Tracking number<input className={inputClass} disabled={terminal} value={tracking[order.id] ?? order.lrNumber ?? ""} onChange={(event) => setTracking((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="AWB / tracking ID"/></label><label className="text-xs font-semibold text-slate-600">Tracking URL<input className={inputClass} disabled={terminal} type="url" value={trackingUrl[order.id] ?? order.trackingUrl ?? ""} onChange={(event) => setTrackingUrl((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="https://… (optional)"/></label>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><label className="text-xs font-semibold text-slate-600">Delivery status<select className={inputClass} disabled={terminal} value={status} onChange={(event) => setStatuses((old) => ({ ...old, [order.id]: event.target.value as Status }))}>{order.deliveryStatus === "cancelled" ? <option value="cancelled">Cancelled</option> : null}<option value="packing">Packed</option><option value="shipped">Shipped</option><option value="out_for_delivery">Out for delivery</option><option value="delivered">Delivered</option></select></label><label className="text-xs font-semibold text-slate-600">Delivery partner<input className={inputClass} disabled={terminal} value={carrier[order.id] ?? order.deliveryPartner ?? ""} onChange={(event) => setCarrier((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="Courier / carrier"/></label><label className="text-xs font-semibold text-slate-600">Tracking number<input className={inputClass} disabled={terminal} value={tracking[order.id] ?? order.lrNumber ?? ""} onChange={(event) => setTracking((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="AWB / tracking ID"/></label><label className="text-xs font-semibold text-slate-600">Tracking URL <span className="font-normal text-slate-500">(optional)</span><input className={inputClass} disabled={terminal} type="url" value={trackingUrl[order.id] ?? order.trackingUrl ?? ""} onChange={(event) => setTrackingUrl((old) => ({ ...old, [order.id]: event.target.value }))} placeholder="https://…"/></label>
             <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs sm:col-span-2"><p className="font-semibold text-slate-700">Tracking slip</p><div className="mt-2 flex flex-wrap items-center gap-2"><label className="inline-flex h-9 cursor-pointer items-center rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50">Choose file<input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={fileChange(order.id, "tracking_slip")}/></label><button type="button" disabled={!currentSlip || busy === trackingKey} onClick={() => void uploadRetailDocument(order, "tracking_slip")} className="h-9 rounded-lg bg-blue-700 px-3 font-semibold text-white disabled:opacity-50">{busy === trackingKey ? "Uploading…" : "Upload tracking slip"}</button>{currentSlip ? <span className="text-slate-600">{currentSlip.name}</span> : null}{existingSlip ? <a className="font-semibold text-blue-700 underline" href={existingSlip.url} target="_blank" rel="noreferrer">View latest: {existingSlip.fileName}</a> : null}</div><p className="mt-1 text-slate-500">PDF, JPG, PNG, or WebP · up to 3 MB</p></div>
             <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs sm:col-span-2"><p className="font-semibold text-slate-700">Proof of delivery</p><div className="mt-2 flex flex-wrap items-center gap-2"><label className="inline-flex h-9 cursor-pointer items-center rounded-lg border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50">Choose file<input className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={fileChange(order.id, "proof_of_delivery")}/></label><button type="button" disabled={!currentProof || busy === proofKey} onClick={() => void uploadRetailDocument(order, "proof_of_delivery")} className="h-9 rounded-lg bg-blue-700 px-3 font-semibold text-white disabled:opacity-50">{busy === proofKey ? "Uploading…" : "Upload proof of delivery"}</button>{currentProof ? <span className="text-slate-600">{currentProof.name}</span> : null}{existingProof ? <a className="font-semibold text-blue-700 underline" href={existingProof.url} target="_blank" rel="noreferrer">View latest: {existingProof.fileName}</a> : null}</div><p className="mt-1 text-slate-500">PDF, JPG, PNG, or WebP · up to 3 MB</p></div>
             <div className="flex items-end"><button type="button" disabled={terminal || busy === order.id} onClick={() => void updateRetail(order)} className="h-10 w-full rounded-lg bg-[#174f40] px-4 text-sm font-bold text-white disabled:opacity-50">{busy === order.id ? "Saving…" : "Save order update →"}</button></div>
           </div>
-          <a className="mt-3 inline-block text-xs font-semibold text-blue-700 underline" href={`/api/offline-sales/${order.id}/documents`} target="_blank" rel="noreferrer">View order documents</a>
+          <button type="button" onClick={() => void toggleOrderDocuments(order)} className="mt-3 text-xs font-semibold text-blue-700 underline">{expandedDocuments[order.id] ? "Hide order documents" : "View order documents"}</button>
+          {expandedDocuments[order.id] ? <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+            {loadingDocuments[order.id] ? <p className="text-slate-500">Loading documents…</p> : documentErrors[order.id] ? <p role="alert" className="text-rose-700">{documentErrors[order.id]}</p> : orderDocumentLists[order.id]?.length ? <ul className="space-y-2">{orderDocumentLists[order.id].map((document) => <li key={document.url} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2"><div><p className="font-semibold text-slate-800">{document.fileName}</p><p className="text-xs capitalize text-slate-500">{document.kind.replaceAll("_", " ")} · {new Date(document.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" })}</p></div><a className="font-semibold text-blue-700 underline" href={document.url} target="_blank" rel="noreferrer">Open document</a></li>)}</ul> : <p className="text-slate-500">No documents have been uploaded for this order yet.</p>}
+          </div> : null}
         </article>;
       }) : <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">Sales has not submitted any retail orders yet.</p>}
-    </section>
+    </section> : null}
   </section>;
 }
