@@ -125,7 +125,10 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   const paymentPaisa = paisa(paymentAmount);
   const available = (productId: string) => entryData.retailBalances.find((row) => row.productId === productId && row.warehouseLocationId === locationId)?.available ?? 0;
   const stockedProducts = entryData.products.filter((product) => available(product.id) > 0);
-  const lineTotal = (line: Line) => Math.max(0, Number(line.quantity || 0) * paisa(line.unitPrice));
+  const lineTotal = (line: Line) => {
+    const subtotal = Math.max(0, Number(line.quantity || 0) * paisa(line.unitPrice));
+    return Math.max(0, subtotal - Math.min(subtotal, percentageDiscountPaisa(subtotal, line.discount)));
+  };
 
   function updateLine(index: number, key: keyof Line, value: string) {
     setLines(current => current.map((line, i) => i === index ? { ...line, [key]: value, ...(key === "productId" ? { unitPrice: ((entryData.products.find(p => p.id === value)?.unitPricePaisa ?? 0) / 100).toFixed(2) } : {}) } : line));
@@ -192,7 +195,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
           <label className="text-xs font-semibold text-slate-600">GST<select className={input} value={line.gstRate} onChange={e=>updateLine(index,"gstRate",e.target.value)}>{[0,5,12,18,28].map(x=><option key={x} value={x}>{x}%</option>)}</select></label>
           <label className="text-xs font-semibold text-slate-600">Discount %<input className={input} type="number" min="0" max="100" step="0.01" value={line.discount} onChange={e=>updateLine(index,"discount",e.target.value)}/></label>
           <div className="pb-2 text-xs text-slate-500">{line.productId?`${available(line.productId)} available`:"Stock —"}</div>
-          <div className="pb-2 text-xs font-semibold text-slate-700">Total (unit price × qty)<br/><span className="text-sm">{money(lineTotal(line))}</span></div>
+          <div className="pb-2 text-xs font-semibold text-slate-700">Total after discount<br/><span className="text-sm">{money(lineTotal(line))}</span></div>
           <button type="button" disabled={lines.length===1} onClick={()=>setLines(current=>current.filter((_,i)=>i!==index))} className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 disabled:opacity-40">Remove</button>
         </div>)}</div>
       </section>
