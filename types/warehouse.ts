@@ -51,4 +51,19 @@ export interface WarehouseWorkspaceData {
   activities: WarehouseActivity[];
   salesOrders: import("@/types/offline-sales").OfflineSaleRow[];
   salesOrdersMigrationPending: boolean;
+  shopifyOrders: ShopifyWarehouseOrder[];
+  shopifyOrdersError: string | null;
+  trackingSlips: Record<string, { fileName: string; url: string }>;
+}
+
+export interface ShopifyWarehouseOrder {
+  id: string;
+  name: string;
+  createdAt: string;
+  customerName: string;
+  destination: string;
+  total: string;
+  currency: string;
+  fulfillmentOrders: { id: string; status: string; remainingQuantity: number }[];
+  lines: { title: string; sku: string | null; quantity: number }[];
 }

@@ -106,6 +106,40 @@ export const ORDERS_QUERY = `#graphql
   }
 `;
 
+export const WAREHOUSE_ORDERS_QUERY = `#graphql
+  query WarehouseOrders($first: Int!, $after: String, $query: String!) {
+    orders(first: $first, after: $after, sortKey: PROCESSED_AT, reverse: true, query: $query) {
+      nodes {
+        id
+        name
+        createdAt
+        displayFinancialStatus
+        totalPriceSet { shopMoney { amount currencyCode } }
+        customer { firstName lastName displayName }
+        shippingAddress { name address1 address2 city province zip country }
+        lineItems(first: 100) { nodes { title sku quantity currentQuantity } }
+        fulfillmentOrders(first: 20) {
+          nodes {
+            id
+            status
+            lineItems(first: 100) { nodes { remainingQuantity } }
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+export const FULFILLMENT_CREATE_MUTATION = `#graphql
+  mutation WarehouseFulfillmentCreate($fulfillment: FulfillmentInput!) {
+    fulfillmentCreate(fulfillment: $fulfillment) {
+      fulfillment { id status trackingInfo { company number url } }
+      userErrors { field message }
+    }
+  }
+`;
+
 export const INVENTORY_ADJUST_QUANTITIES_MUTATION = `#graphql
   mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
     inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {

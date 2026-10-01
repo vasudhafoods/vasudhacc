@@ -48,10 +48,12 @@ Never commit `.env.local`, expose these values through `NEXT_PUBLIC_` variables,
 The installed Shopify Dev Dashboard app requires these Admin API scopes:
 
 ```text
-read_products,read_inventory,write_inventory,read_locations,read_orders,read_fulfillments
+read_products,read_inventory,write_inventory,read_locations,read_orders,read_fulfillments,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders
 ```
 
 After changing scopes, release a new app version and approve the updated installation on the store. The app must remain installed for client-credentials authentication to work.
+
+The Warehouse Orders page uses `read_merchant_managed_fulfillment_orders` and `write_merchant_managed_fulfillment_orders` to list open Shopify fulfillment work and submit carrier tracking when an order ships. Run `npm run db:migrate` after deploying migrations so Retail tracking URLs and tracking-slip uploads are available.
 
 ## Team authentication
 

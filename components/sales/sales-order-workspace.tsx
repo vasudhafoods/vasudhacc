@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
@@ -50,6 +50,12 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(""), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
 
   function selectCustomer(customerId: string) {
     setSelectedCustomerId(customerId);
@@ -165,7 +171,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
       const uploadIssues: string[] = [];
       try { await upload(sale.id, "invoice", invoiceFile); } catch (e) { uploadIssues.push(e instanceof Error ? e.message : "Invoice upload failed."); }
       if (paymentPaisa > 0 && proof) try { await upload(sale.id, "payment_proof", proof); } catch (e) { uploadIssues.push(e instanceof Error ? e.message : "Payment proof upload failed."); }
-      setNotice(`${sale.billingInvoiceNumber} submitted to warehouse. Total ${money(sale.totalAmountPaisa)} · ${sale.paymentStatus} payment.${uploadIssues.length ? ` Order saved; ${uploadIssues.join(" ")}` : " Invoice and payment documents uploaded."}`);
+      setNotice(`Order has been placed to warehouse · ${sale.billingInvoiceNumber}. Total ${money(sale.totalAmountPaisa)} · ${sale.paymentStatus} payment.${uploadIssues.length ? ` ${uploadIssues.join(" ")}` : " Invoice and payment documents uploaded."}`);
       router.refresh();
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Order could not be submitted."); }
     finally { setBusy(false); }
@@ -174,7 +180,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   return <div className="space-y-6">
     <section className="rounded-2xl bg-[#174f40] p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[.16em] text-emerald-200">Retail sales</p><h1 className="mt-2 text-3xl font-bold">Create a customer order</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50">Orders are sent directly to the warehouse queue. Retail stock is reserved when the order is submitted and issued when Warehouse marks it dispatched.</p></section>
     {error ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</p> : null}
-    {notice ? <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">{notice}</p> : null}
+    {notice ? <div role="status" aria-live="polite" className="fixed right-5 top-24 z-[120] flex max-w-xl items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-semibold text-emerald-950 shadow-xl"><span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-white">✓</span><span>{notice}</span><button type="button" onClick={()=>setNotice("")} className="ml-2 text-lg leading-5 text-emerald-800" aria-label="Dismiss notification">×</button></div> : null}
     <form onSubmit={submit} className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <section><h2 className="text-lg font-bold text-slate-900">Invoice and customer</h2><div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-64 flex-1 text-sm font-semibold">Use saved customer<select className={input} value={selectedCustomerId} onChange={e=>selectCustomer(e.target.value)}><option value="">New / enter customer details</option>{customers.map(item=><option key={item.id} value={item.id}>{item.companyName ? `${item.companyName} · ${item.name}` : item.name} · {item.phone}</option>)}</select></label><button type="button" onClick={()=>{setCustomerError("");setShowCustomerForm(true);}} className="h-11 rounded-lg border border-blue-300 bg-white px-4 text-sm font-bold text-blue-800">+ Create customer</button></div><div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <label className="text-sm font-semibold">Order date<input className={input} type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>

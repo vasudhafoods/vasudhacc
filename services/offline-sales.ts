@@ -73,6 +73,7 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     deliveryPartner: sale.deliveryPartner,
     deliveryCostPaisa: sale.deliveryCostPaisa,
     lrNumber: sale.lrNumber,
+    trackingUrl: sale.trackingUrl,
     warehouseLocationId: sale.warehouseLocationId,
     expectedNextPaymentDate: sale.expectedNextPaymentDate,
     lines: sale.lines,
@@ -418,25 +419,30 @@ export async function setOfflineSalePaymentReminder(input: { saleId: string; rem
   });
 }
 
-export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; status: "packing" | "shipped" | "dispatched" | "delivered" | "cancelled"; actorUsername: string }) {
+export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; status: "packing" | "shipped" | "out_for_delivery" | "dispatched" | "delivered" | "cancelled"; deliveryPartner?: string; trackingNumber?: string; trackingUrl?: string; actorUsername: string }) {
+  const deliveryPartner = input.deliveryPartner?.trim() ?? "";
+  const trackingNumber = input.trackingNumber?.trim() ?? "";
+  const trackingUrl = input.trackingUrl?.trim() ?? "";
+  if (deliveryPartner.length > 100 || trackingNumber.length > 120 || trackingUrl.length > 500) throw new OfflineSalesError("INVALID_SALE", "Delivery and tracking details exceed the allowed length.");
+  if (trackingUrl) { let url: URL; try { url = new URL(trackingUrl); } catch { throw new OfflineSalesError("INVALID_SALE", "Enter a valid tracking URL."); } if (url.protocol !== "https:") throw new OfflineSalesError("INVALID_SALE", "Tracking URL must use HTTPS."); }
+  if (["shipped", "out_for_delivery", "delivered"].includes(input.status) && !trackingNumber) throw new OfflineSalesError("INVALID_SALE", "Enter a tracking ID before marking the order shipped or later.");
   const db = getDatabase();
   return db.transaction(async (tx) => {
     const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).for("update").limit(1);
     if (!sale) throw new OfflineSalesError("NOT_FOUND", "This sales order could not be found.");
     const previousStatus = sale.deliveryStatus;
-    if (previousStatus === input.status) return { saleNumber: sale.saleNumber, status: previousStatus, duplicate: true };
     if (previousStatus === "delivered" || previousStatus === "cancelled") throw new OfflineSalesError("INVALID_SALE", `A ${previousStatus} order cannot be changed.`);
     if (input.status === "cancelled") {
-      if (previousStatus === "dispatched") throw new OfflineSalesError("INVALID_SALE", "A dispatched order cannot be cancelled. Record a return instead.");
+      if (["shipped", "out_for_delivery", "dispatched"].includes(previousStatus)) throw new OfflineSalesError("INVALID_SALE", "A shipped order cannot be cancelled. Record a return instead.");
       const lines = sale.lines.filter((line) => line.productId);
       for (const line of lines) {
         const [balance] = await tx.select().from(inventoryBalances).where(and(eq(inventoryBalances.productId, line.productId!), eq(inventoryBalances.warehouseLocationId, sale.warehouseLocationId!), eq(inventoryBalances.bucket, "retail"))).for("update").limit(1);
         if (balance) await tx.update(inventoryBalances).set({ reserved: sql`GREATEST(${inventoryBalances.reserved} - ${line.quantity}, 0)`, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
       }
-    } else {
-      const next = previousStatus === "packing" ? "shipped" : previousStatus === "shipped" ? "dispatched" : previousStatus === "dispatched" ? "delivered" : null;
+    } else if (previousStatus !== input.status) {
+      const next = previousStatus === "packing" ? "shipped" : previousStatus === "shipped" ? "out_for_delivery" : ["out_for_delivery", "dispatched"].includes(previousStatus) ? "delivered" : null;
       if (input.status !== next) throw new OfflineSalesError("INVALID_SALE", `Move this order from ${previousStatus} to ${next ?? "a terminal status"} first.`);
-      if (input.status === "dispatched") {
+      if (input.status === "shipped") {
         const lines = sale.lines.filter((line) => line.productId);
         if (!sale.warehouseLocationId || lines.length !== sale.lines.length) throw new OfflineSalesError("INVALID_SALE", "This order is missing its warehouse or product mapping and cannot be dispatched.");
         if (await tx.select({ id: inventoryTransactions.id }).from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, `offline-sale-dispatch:${sale.id}`)).limit(1).then(rows => rows.length)) throw new OfflineSalesError("INVALID_SALE", "This order has already issued stock; contact a manager to review its status.");
@@ -447,7 +453,7 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
           if (!balance || balance.reserved < line.quantity || balance.onHand < line.quantity) throw new OfflineSalesError("INVALID_SALE", `${line.productName} no longer has enough reserved Retail stock to dispatch this order.`);
         }
         const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${uuid().slice(0, 8).toUpperCase()}`;
-        const [transaction] = await tx.insert(inventoryTransactions).values({ transactionNumber, type: "retail_issue", idempotencyKey: `offline-sale-dispatch:${sale.id}`, referenceId: sale.billingInvoiceNumber ?? sale.saleNumber, actorUsername: input.actorUsername, reason: "Sales order dispatched from warehouse", occurredAt: new Date(), metadata: { destination: sale.customerName, offlineSaleId: sale.id, saleNumber: sale.saleNumber, billingInvoiceNumber: sale.billingInvoiceNumber, orderValuePaisa: sale.totalAmountPaisa, totalQuantity: lines.reduce((sum, line) => sum + line.quantity, 0), deliveryStatus: "dispatched" } }).returning({ id: inventoryTransactions.id });
+        const [transaction] = await tx.insert(inventoryTransactions).values({ transactionNumber, type: "retail_issue", idempotencyKey: `offline-sale-dispatch:${sale.id}`, referenceId: sale.billingInvoiceNumber ?? sale.saleNumber, actorUsername: input.actorUsername, reason: "Sales order shipped from warehouse", occurredAt: new Date(), metadata: { destination: sale.customerName, offlineSaleId: sale.id, saleNumber: sale.saleNumber, billingInvoiceNumber: sale.billingInvoiceNumber, orderValuePaisa: sale.totalAmountPaisa, totalQuantity: lines.reduce((sum, line) => sum + line.quantity, 0), deliveryStatus: "shipped" } }).returning({ id: inventoryTransactions.id });
         const txLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
         for (const line of lines) {
           const balance = balanceByProduct.get(line.productId!)!;
@@ -458,8 +464,8 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
         if (txLines.length) await tx.insert(inventoryTransactionLines).values(txLines);
       }
     }
-    await tx.update(offlineSales).set({ deliveryStatus: input.status, updatedAt: new Date() }).where(eq(offlineSales.id, sale.id));
-    await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "offline_sale.delivery_status_updated", entityType: "offline_sale", entityId: sale.id, previousValue: { deliveryStatus: previousStatus }, newValue: { deliveryStatus: input.status }, reason: input.status === "cancelled" ? "Sales order cancelled; reserved Retail stock released" : "Warehouse fulfillment status updated" });
+    await tx.update(offlineSales).set({ deliveryStatus: input.status, deliveryPartner: deliveryPartner || sale.deliveryPartner, lrNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl, updatedAt: new Date() }).where(eq(offlineSales.id, sale.id));
+    await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "offline_sale.delivery_status_updated", entityType: "offline_sale", entityId: sale.id, previousValue: { deliveryStatus: previousStatus, deliveryPartner: sale.deliveryPartner, lrNumber: sale.lrNumber, trackingUrl: sale.trackingUrl }, newValue: { deliveryStatus: input.status, deliveryPartner: deliveryPartner || sale.deliveryPartner, trackingNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl }, reason: input.status === "cancelled" ? "Sales order cancelled; reserved Retail stock released" : "Warehouse fulfillment status and tracking updated" });
     return { saleNumber: sale.saleNumber, status: input.status, duplicate: false };
   });
 }

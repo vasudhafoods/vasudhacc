@@ -24,7 +24,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ sal
 export async function POST(request: Request, { params }: { params: Promise<{ saleId: string }> }) {
   const session = await getDashboardSession();
   if (!session) return Response.json({ error: { message: "Authentication is required." } }, { status: 401 });
-  if (!sessionHasRole(session, SALES_ACCESS)) return Response.json({ error: { message: "This account cannot upload sales documents." } }, { status: 403 });
+  if (!sessionHasRole(session, [...SALES_ACCESS, "warehouse_manager", "warehouse_staff"])) return Response.json({ error: { message: "This account cannot upload sales documents." } }, { status: 403 });
   try {
     const { saleId } = await params;
     const db = getDatabase();
@@ -32,14 +32,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ sal
     if (!sale) return Response.json({ error: { message: "Sales order not found." } }, { status: 404 });
     const form = await request.formData();
     const kind = String(form.get("kind") ?? "");
-    if (kind !== "invoice" && kind !== "payment_proof") return Response.json({ error: { message: "Choose an invoice or payment proof document." } }, { status: 400 });
+    if (kind !== "invoice" && kind !== "payment_proof" && kind !== "tracking_slip") return Response.json({ error: { message: "Choose an invoice, payment proof, or tracking slip." } }, { status: 400 });
+    if (kind === "tracking_slip" && !sessionHasRole(session, ["admin", "management", "warehouse_manager", "warehouse_staff"])) return Response.json({ error: { message: "Only warehouse staff can add a tracking slip." } }, { status: 403 });
     const file = form.get("file");
     if (!(file instanceof File) || file.size < 1) return Response.json({ error: { message: "Choose a file to upload." } }, { status: 400 });
     if (file.size > MAX_FILE_BYTES) return Response.json({ error: { message: "Each file must be 3 MB or less." } }, { status: 413 });
     if (!ALLOWED_TYPES.has(file.type)) return Response.json({ error: { message: "Use a PDF, JPG, PNG, or WebP file." } }, { status: 400 });
     const count = await db.select({ id: offlineSaleDocuments.id }).from(offlineSaleDocuments).where(and(eq(offlineSaleDocuments.offlineSaleId, saleId), eq(offlineSaleDocuments.kind, kind)));
     if (kind === "invoice" && count.length > 0) return Response.json({ error: { message: "An invoice copy is already attached to this order." } }, { status: 409 });
-    if (count.length >= 5) return Response.json({ error: { message: "Up to five payment proofs can be attached to an order." } }, { status: 413 });
+    if (count.length >= (kind === "tracking_slip" ? 1 : 5)) return Response.json({ error: { message: kind === "tracking_slip" ? "A tracking slip is already attached to this order." : "Up to five payment proofs can be attached to an order." } }, { status: 413 });
     const [saved] = await db.insert(offlineSaleDocuments).values({ offlineSaleId: saleId, kind, fileName: file.name.replace(/[\\/\r\n\0]/g, "_").slice(0, 240) || "sales-document", contentType: file.type, fileSize: file.size, contentBase64: Buffer.from(await file.arrayBuffer()).toString("base64"), uploadedBy: session.username }).returning({ id: offlineSaleDocuments.id });
     return Response.json({ ok: true, id: saved.id }, { status: 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {

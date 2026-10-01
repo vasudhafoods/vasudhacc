@@ -31,6 +31,7 @@ export interface OfflineSaleRow {
   deliveryPartner: string | null;
   deliveryCostPaisa: number | null;
   lrNumber: string | null;
+  trackingUrl?: string | null;
   warehouseLocationId: string | null;
   expectedNextPaymentDate: string | null;
   lines: { productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[];

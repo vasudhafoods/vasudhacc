@@ -233,6 +233,7 @@ export const offlineSales = pgTable("offline_sales", {
   deliveryPartner: text("delivery_partner"),
   deliveryCostPaisa: integer("delivery_cost_paisa"),
   lrNumber: text("lr_number"),
+  trackingUrl: text("tracking_url"),
   warehouseLocationId: uuid("warehouse_location_id").references(() => warehouseLocations.id, { onDelete: "restrict" }),
   expectedNextPaymentDate: text("expected_next_payment_date"),
   lines: jsonb("lines").$type<{ productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[]>().default([]).notNull(),
@@ -280,7 +281,7 @@ export const offlineSaleDocuments = pgTable("offline_sale_documents", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("offline_sale_documents_sale_idx").on(table.offlineSaleId),
-  check("offline_sale_documents_kind_valid", sql`${table.kind} IN ('invoice', 'payment_proof')`),
+  check("offline_sale_documents_kind_valid", sql`${table.kind} IN ('invoice', 'payment_proof', 'tracking_slip')`),
   check("offline_sale_documents_file_size_positive", sql`${table.fileSize} > 0`),
 ]);
 
