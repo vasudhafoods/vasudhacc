@@ -237,13 +237,15 @@ export async function createOfflineSale(input: {
   const lines = baseLines.map((line, index) => {
     const allocatedDiscount = allocations[index];
     const totalLineDiscount = line.discountPaisa + allocatedDiscount;
-    const lineTaxPaisa = Math.round((line.lineSubtotal - totalLineDiscount) * line.gstRateBps / 10_000);
-    const lineTotalPaisa = line.lineSubtotal - totalLineDiscount + lineTaxPaisa;
+    // Sales unit prices are GST-inclusive; report the tax component without adding tax on top.
+    const inclusiveLineAmount = line.lineSubtotal - totalLineDiscount;
+    const lineTaxPaisa = Math.round(inclusiveLineAmount * line.gstRateBps / (10_000 + line.gstRateBps));
+    const lineTotalPaisa = inclusiveLineAmount;
     taxPaisa += lineTaxPaisa;
     return { productId: line.productId, productName: line.productName, sku: line.sku, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa, gstRateBps: line.gstRateBps, discountPaisa: totalLineDiscount, taxPaisa: lineTaxPaisa, lineTotalPaisa };
   });
   const discountPaisa = productDiscountPaisa + invoiceDiscountPaisa;
-  const totalAmountPaisa = validPaisa(subtotalAmountPaisa - discountPaisa + taxPaisa, "INVALID_SALE", "Invoice total");
+  const totalAmountPaisa = validPaisa(subtotalAmountPaisa - discountPaisa, "INVALID_SALE", "Invoice total");
   if (!Number.isSafeInteger(input.initialCollectionPaisa) || input.initialCollectionPaisa < 0 || input.initialCollectionPaisa > totalAmountPaisa) throw new OfflineSalesError("INVALID_SALE", "Collected amount must be between zero and the invoice total.");
   if (input.initialCollectionPaisa > 0) {
     if (!input.paymentMode || !input.paymentReceiverName?.trim() || !input.paymentProofFileName) throw new OfflineSalesError("INVALID_SALE", "Payment mode, receiver name, and payment proof are required when payment is recorded.");

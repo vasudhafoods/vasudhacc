@@ -8,6 +8,7 @@ type Line = { productId: string; quantity: string; unitPrice: string; gstRate: s
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const money = (paisa: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paisa / 100);
 const paisa = (value: string) => /^\d+(?:\.\d{1,2})?$/.test(value.trim()) ? Math.round(Number(value) * 100) : 0;
+const percentageDiscountPaisa = (basePaisa: number, percent: string) => Math.round(basePaisa * (Number(percent) || 0) / 100);
 const input = "mt-1.5 h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
 const freshLine = (): Line => ({ productId: "", quantity: "1", unitPrice: "", gstRate: "0", discount: "0" });
 
@@ -96,7 +97,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   const totals = useMemo(() => {
     const values = lines.map((line) => {
       const base = (Number(line.quantity) || 0) * paisa(line.unitPrice);
-      const lineDiscount = Math.min(base, paisa(line.discount));
+      const lineDiscount = Math.min(base, percentageDiscountPaisa(base, line.discount));
       return { base, lineDiscount, taxable: Math.max(0, base - lineDiscount), gstRate: Number(line.gstRate || 0) };
     });
     const subtotal = values.reduce((sum, line) => sum + line.base, 0);
@@ -114,9 +115,12 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
       if (remaining <= 0) break;
       if (shares[item.index] < values[item.index].taxable) { shares[item.index] += 1; remaining -= 1; }
     }
-    const tax = values.reduce((sum, line, index) => sum + Math.round((line.taxable - shares[index]) * line.gstRate / 100), 0);
+    const tax = values.reduce((sum, line, index) => {
+      const inclusiveAmount = line.taxable - shares[index];
+      return sum + Math.round(inclusiveAmount * line.gstRate / (100 + line.gstRate));
+    }, 0);
     const discount = productDiscount + invoiceDiscount;
-    return { subtotal, discount, productDiscount, invoiceDiscount, tax, total: subtotal - discount + tax };
+    return { subtotal, discount, productDiscount, invoiceDiscount, tax, total: subtotal - discount };
   }, [lines, invoiceDiscountMode, invoiceDiscountInput]);
   const paymentPaisa = paisa(paymentAmount);
   const available = (productId: string) => entryData.retailBalances.find((row) => row.productId === productId && row.warehouseLocationId === locationId)?.available ?? 0;
@@ -144,7 +148,11 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
         const quantity = Number(line.quantity);
         if (!product || !Number.isSafeInteger(quantity) || quantity < 1) throw new Error("Choose a product and valid quantity for every line.");
         if (quantity > available(product.id)) throw new Error(`${product.name} has only ${available(product.id)} Retail packets available at the selected warehouse.`);
-        return { productId: product.id, productName: product.name, sku: product.sku, quantity, unitPricePaisa: paisa(line.unitPrice), gstRateBps: Number(line.gstRate) * 100, discountPaisa: paisa(line.discount) };
+        const discountPercent = Number(line.discount || 0);
+        if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) throw new Error("Product discount must be between 0% and 100%.");
+        const unitPricePaisa = paisa(line.unitPrice);
+        const lineSubtotalPaisa = quantity * unitPricePaisa;
+        return { productId: product.id, productName: product.name, sku: product.sku, quantity, unitPricePaisa, gstRateBps: Number(line.gstRate) * 100, discountPaisa: percentageDiscountPaisa(lineSubtotalPaisa, line.discount) };
       });
       if (new Set(preparedLines.map(line => line.productId)).size !== preparedLines.length) throw new Error("Use one line per product; combine quantities on the same line.");
       const response = await fetch("/api/offline-sales", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ saleDate: date, requestedDispatchDate: requestedDispatchDate || undefined, billingInvoiceNumber: invoiceNo, invoiceFileName: invoiceFile.name, customerName: customer, customerCompanyName: companyName || undefined, customerContact: contact || undefined, billingAddress: billing, shippingSameAsBilling: sameAddress, shippingAddress: sameAddress ? billing : shipping, gstNumber: gstin || undefined, customerType: "retail", isNewB2bCustomer: false, warehouseLocationId: locationId, initialCollectionPaisa: paymentPaisa, additionalDiscountPaisa: totals.invoiceDiscount, paymentMode: paymentPaisa ? paymentMode : undefined, paymentTransactionId: transactionId || undefined, paymentReceiverName: receiver || undefined, paymentProofFileName: proof?.name, expectedNextPaymentDate: nextPaymentDate || undefined, lines: preparedLines }) });
@@ -182,7 +190,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
           <label className="text-xs font-semibold text-slate-600">Qty<input className={input} type="number" min="1" step="1" value={line.quantity} onChange={e=>updateLine(index,"quantity",e.target.value)} required/></label>
           <label className="text-xs font-semibold text-slate-600">Unit price ₹<input className={input} type="number" min="0.01" step="0.01" value={line.unitPrice} onChange={e=>updateLine(index,"unitPrice",e.target.value)} required/></label>
           <label className="text-xs font-semibold text-slate-600">GST<select className={input} value={line.gstRate} onChange={e=>updateLine(index,"gstRate",e.target.value)}>{[0,5,12,18,28].map(x=><option key={x} value={x}>{x}%</option>)}</select></label>
-          <label className="text-xs font-semibold text-slate-600">Discount ₹<input className={input} type="number" min="0" step="0.01" value={line.discount} onChange={e=>updateLine(index,"discount",e.target.value)}/></label>
+          <label className="text-xs font-semibold text-slate-600">Discount %<input className={input} type="number" min="0" max="100" step="0.01" value={line.discount} onChange={e=>updateLine(index,"discount",e.target.value)}/></label>
           <div className="pb-2 text-xs text-slate-500">{line.productId?`${available(line.productId)} available`:"Stock —"}</div>
           <div className="pb-2 text-xs font-semibold text-slate-700">Total (unit price × qty)<br/><span className="text-sm">{money(lineTotal(line))}</span></div>
           <button type="button" disabled={lines.length===1} onClick={()=>setLines(current=>current.filter((_,i)=>i!==index))} className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 disabled:opacity-40">Remove</button>
