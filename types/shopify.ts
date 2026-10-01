@@ -18,6 +18,7 @@ export interface ShopifyVariantNode {
   id: string;
   title: string;
   sku: string | null;
+  price: string;
   media: { nodes: ShopifyMediaNode[] };
   product: {
     id: string;
@@ -52,6 +53,7 @@ export interface CurrentInventoryItem {
   productTitle: string;
   variantTitle: string;
   sku: string | null;
+  price: string;
   imageUrl: string | null;
   locationName: string;
   available: number;

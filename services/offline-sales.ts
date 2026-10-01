@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { randomUUID as uuid } from "node:crypto";
-import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, warehouseLocations } from "@/db/schema";
-import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview } from "@/types/offline-sales";
+import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, warehouseLocations } from "@/db/schema";
+import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
+import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
+import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 const MAX_AMOUNT_PAISA = 1_000_000_000;
 
@@ -46,6 +48,7 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     saleNumber: sale.saleNumber,
     saleDate: sale.saleDate.toISOString(),
     customerName: sale.customerName,
+    customerCompanyName: sale.customerCompanyName,
     customerContact: sale.customerContact,
     billingInvoiceNumber: sale.billingInvoiceNumber,
     billingAddress: sale.billingAddress,
@@ -78,16 +81,39 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
 
 export async function getOfflineSalesEntryData(): Promise<OfflineSalesEntryData> {
   const db = getDatabase();
-  const [productsRows, locations, retailRows] = await Promise.all([
+  const [productsRows, locations, retailRows, livePrices, customers] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, category: products.category, unitPricePaisa: products.unitPricePaisa }).from(products).where(eq(products.active, true)).orderBy(products.name),
     db.select({ id: warehouseLocations.id, code: warehouseLocations.code, name: warehouseLocations.name }).from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
     db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved }).from(inventoryBalances).where(eq(inventoryBalances.bucket, "retail")),
+    fetchShopifyPricesBySku().catch(() => new Map<string, number>()),
+    db.select({ id: salesCustomers.id, name: salesCustomers.name, companyName: salesCustomers.companyName, address: salesCustomers.address, phone: salesCustomers.phone, gstNumber: salesCustomers.gstNumber }).from(salesCustomers).where(eq(salesCustomers.active, true)).orderBy(salesCustomers.name),
   ]);
   return {
-    products: productsRows.filter((product) => !/\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(product.name)),
+    products: productsRows.flatMap((product) => {
+      if (/\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(product.name)) return [];
+      const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
+      if (packMatch && Number(packMatch[1]) !== 1) return [];
+      const displayName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+1\b.*$/i, "").trim() || product.name;
+      return [{ ...product, name: displayName, unitPricePaisa: listedOfflineUnitPricePaisa(displayName) ?? livePrices.get(product.sku.trim().toUpperCase()) ?? product.unitPricePaisa }];
+    }),
     locations,
     retailBalances: retailRows.map((row) => ({ productId: row.productId, warehouseLocationId: row.warehouseLocationId, available: Math.max(0, row.onHand - row.reserved) })),
+    customers,
   };
+}
+
+export async function createSalesCustomer(input: { name: string; companyName?: string; address: string; phone: string; gstNumber?: string; actorUsername: string }): Promise<SalesCustomer> {
+  const name = text(input.name, "Customer name", 2, 160, true)!;
+  const companyName = text(input.companyName, "Company name", 2, 160);
+  const address = text(input.address, "Customer address", 5, 500, true)!;
+  const phone = text(input.phone, "Phone number", 7, 20, true)!;
+  if (!/^\+?[0-9 ().-]{7,20}$/.test(phone)) throw new OfflineSalesError("INVALID_SALE", "Enter a valid customer phone number.");
+  const gstNumber = text(input.gstNumber, "GST number", 15, 15)?.toUpperCase() ?? null;
+  if (gstNumber && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstNumber)) throw new OfflineSalesError("INVALID_SALE", "Enter a valid GSTIN or leave it blank.");
+  const db = getDatabase();
+  const [customer] = await db.insert(salesCustomers).values({ name, companyName, address, phone, gstNumber, createdBy: input.actorUsername }).returning({ id: salesCustomers.id, name: salesCustomers.name, companyName: salesCustomers.companyName, address: salesCustomers.address, phone: salesCustomers.phone, gstNumber: salesCustomers.gstNumber });
+  await db.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "sales_customer.created", entityType: "sales_customer", entityId: customer.id, newValue: customer, reason: "Sales customer added for repeat order entry" });
+  return customer;
 }
 
 function rangeBoundary(value: string, boundary: "start" | "end"): Date {
@@ -133,6 +159,7 @@ export async function createOfflineSale(input: {
   saleDate: string;
   billingInvoiceNumber: string;
   customerName: string;
+  customerCompanyName?: string;
   customerContact?: string;
   billingAddress: string;
   shippingAddress?: string;
@@ -141,6 +168,7 @@ export async function createOfflineSale(input: {
   customerType: OfflineCustomerType;
   isNewB2bCustomer: boolean;
   initialCollectionPaisa: number;
+  additionalDiscountPaisa?: number;
   paymentMode?: string;
   paymentTransactionId?: string;
   paymentReceiverName?: string;
@@ -165,6 +193,7 @@ export async function createOfflineSale(input: {
   const billingInvoiceNumber = text(input.billingInvoiceNumber, "Billing invoice number", 2, 100, true)!;
   if (!input.invoiceFileName?.trim()) throw new OfflineSalesError("INVALID_SALE", "Upload the invoice copy before submitting the order.");
   const customerName = text(input.customerName, "Customer name", 2, 160, true)!;
+  const customerCompanyName = text(input.customerCompanyName, "Company name", 2, 160);
   const customerContact = text(input.customerContact, "Customer contact", 3, 80);
   const billingAddress = text(input.billingAddress, "Billing address", 5, 500, true)!;
   const shippingSameAsBilling = Boolean(input.shippingSameAsBilling);
@@ -178,22 +207,38 @@ export async function createOfflineSale(input: {
   const uniqueProducts = new Set<string>();
   if (!Array.isArray(input.lines) || input.lines.length < 1 || input.lines.length > 50) throw new OfflineSalesError("INVALID_SALE", "Add between 1 and 50 order product lines.");
   let subtotalAmountPaisa = 0;
-  let discountPaisa = 0;
-  let taxPaisa = 0;
-  const lines = input.lines.map((line) => {
+  let productDiscountPaisa = 0;
+  const baseLines = input.lines.map((line) => {
     if (!line.productId || !line.productName.trim() || !Number.isSafeInteger(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unitPricePaisa) || line.unitPricePaisa <= 0) throw new OfflineSalesError("INVALID_SALE", "Each product needs a valid item, quantity, and unit price.");
     if (!Number.isSafeInteger(line.gstRateBps) || line.gstRateBps < 0 || line.gstRateBps > 2800) throw new OfflineSalesError("INVALID_SALE", "GST must be from 0% to 28%.");
     const lineSubtotal = line.quantity * line.unitPricePaisa;
     if (!Number.isSafeInteger(lineSubtotal) || !Number.isSafeInteger(line.discountPaisa) || line.discountPaisa < 0 || line.discountPaisa > lineSubtotal) throw new OfflineSalesError("INVALID_SALE", "A line discount cannot exceed the product line value.");
     if (uniqueProducts.has(line.productId)) throw new OfflineSalesError("INVALID_SALE", "Each product can appear only once; combine quantities on its line.");
     uniqueProducts.add(line.productId);
-    const lineTaxPaisa = Math.round((lineSubtotal - line.discountPaisa) * line.gstRateBps / 10_000);
-    const lineTotalPaisa = lineSubtotal - line.discountPaisa + lineTaxPaisa;
     subtotalAmountPaisa += lineSubtotal;
-    discountPaisa += line.discountPaisa;
-    taxPaisa += lineTaxPaisa;
-    return { ...line, taxPaisa: lineTaxPaisa, lineTotalPaisa };
+    productDiscountPaisa += line.discountPaisa;
+    return { ...line, lineSubtotal, taxableBeforeInvoiceDiscount: lineSubtotal - line.discountPaisa };
   });
+  const taxableBeforeInvoiceDiscount = subtotalAmountPaisa - productDiscountPaisa;
+  const invoiceDiscountPaisa = input.additionalDiscountPaisa ?? 0;
+  if (!Number.isSafeInteger(invoiceDiscountPaisa) || invoiceDiscountPaisa < 0 || invoiceDiscountPaisa > taxableBeforeInvoiceDiscount) throw new OfflineSalesError("INVALID_SALE", "Extra invoice discount cannot exceed the remaining invoice value.");
+  const allocations = baseLines.map((line) => taxableBeforeInvoiceDiscount ? Math.floor(invoiceDiscountPaisa * line.taxableBeforeInvoiceDiscount / taxableBeforeInvoiceDiscount) : 0);
+  let unallocatedDiscount = invoiceDiscountPaisa - allocations.reduce((sum, amount) => sum + amount, 0);
+  const allocationOrder = baseLines.map((line, index) => ({ index, remainder: taxableBeforeInvoiceDiscount ? (invoiceDiscountPaisa * line.taxableBeforeInvoiceDiscount) % taxableBeforeInvoiceDiscount : 0 })).sort((left, right) => right.remainder - left.remainder);
+  for (const item of allocationOrder) {
+    if (unallocatedDiscount <= 0) break;
+    if (allocations[item.index] < baseLines[item.index].taxableBeforeInvoiceDiscount) { allocations[item.index] += 1; unallocatedDiscount -= 1; }
+  }
+  let taxPaisa = 0;
+  const lines = baseLines.map((line, index) => {
+    const allocatedDiscount = allocations[index];
+    const totalLineDiscount = line.discountPaisa + allocatedDiscount;
+    const lineTaxPaisa = Math.round((line.lineSubtotal - totalLineDiscount) * line.gstRateBps / 10_000);
+    const lineTotalPaisa = line.lineSubtotal - totalLineDiscount + lineTaxPaisa;
+    taxPaisa += lineTaxPaisa;
+    return { productId: line.productId, productName: line.productName, sku: line.sku, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa, gstRateBps: line.gstRateBps, discountPaisa: totalLineDiscount, taxPaisa: lineTaxPaisa, lineTotalPaisa };
+  });
+  const discountPaisa = productDiscountPaisa + invoiceDiscountPaisa;
   const totalAmountPaisa = validPaisa(subtotalAmountPaisa - discountPaisa + taxPaisa, "INVALID_SALE", "Invoice total");
   if (!Number.isSafeInteger(input.initialCollectionPaisa) || input.initialCollectionPaisa < 0 || input.initialCollectionPaisa > totalAmountPaisa) throw new OfflineSalesError("INVALID_SALE", "Collected amount must be between zero and the invoice total.");
   if (input.initialCollectionPaisa > 0) {
@@ -227,6 +272,7 @@ export async function createOfflineSale(input: {
       idempotencyKey: input.idempotencyKey,
       saleDate: date,
       customerName,
+      customerCompanyName,
       customerContact,
       billingInvoiceNumber,
       billingAddress,
@@ -276,7 +322,7 @@ export async function createOfflineSale(input: {
       action: "offline_sale.created",
       entityType: "offline_sale",
       entityId: sale.id,
-      newValue: { saleNumber, billingInvoiceNumber, customerName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, status: "packing", reservedProductCount: lines.length },
+      newValue: { saleNumber, billingInvoiceNumber, customerName, customerCompanyName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, status: "packing", reservedProductCount: lines.length },
       reason: "Offline sales order raised; Retail stock reserved for warehouse preparation",
     });
     return { sale: toRow(sale, input.initialCollectionPaisa), duplicate: false };
@@ -338,6 +384,30 @@ export async function recordOfflineSaleCollection(input: {
       reason: "Offline payment collection recorded by sales workspace",
     });
     return { sale: { ...toRow(sale, collectedBefore + amountPaisa), expectedNextPaymentDate: amountPaisa < pending ? input.expectedNextPaymentDate! : null }, duplicate: false };
+  });
+}
+
+export async function setOfflineSalePaymentReminder(input: { saleId: string; reminderDate: string; actorUsername: string }): Promise<OfflineSaleRow> {
+  const reminderDate = input.reminderDate.trim();
+  saleDate(reminderDate);
+  const db = getDatabase();
+  return db.transaction(async (tx) => {
+    const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).for("update").limit(1);
+    if (!sale) throw new OfflineSalesError("NOT_FOUND", "This offline sale could not be found.");
+    const collections = await tx.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(eq(offlineSaleCollections.offlineSaleId, sale.id));
+    const collected = collections.reduce((sum, collection) => sum + collection.amountPaisa, 0);
+    if (collected >= sale.totalAmountPaisa) throw new OfflineSalesError("INVALID_SALE", "This order is fully paid; no payment reminder is needed.");
+    const [updated] = await tx.update(offlineSales).set({ expectedNextPaymentDate: reminderDate, updatedAt: new Date() }).where(eq(offlineSales.id, sale.id)).returning();
+    await tx.insert(auditEvents).values({
+      actorUsername: input.actorUsername,
+      action: "offline_sale.payment_reminder_set",
+      entityType: "offline_sale",
+      entityId: sale.id,
+      previousValue: { expectedNextPaymentDate: sale.expectedNextPaymentDate },
+      newValue: { expectedNextPaymentDate: reminderDate },
+      reason: "Payment follow-up reminder scheduled",
+    });
+    return toRow(updated, collected);
   });
 }
 

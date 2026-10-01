@@ -6,6 +6,7 @@ export interface OfflineSaleRow {
   saleNumber: string;
   saleDate: string;
   customerName: string;
+  customerCompanyName?: string | null;
   customerContact: string | null;
   billingInvoiceNumber: string | null;
   billingAddress: string;
@@ -39,6 +40,16 @@ export interface OfflineSalesEntryData {
   products: { id: string; sku: string; name: string; category: "noodles" | "cookies" | "rte" | "other"; unitPricePaisa: number }[];
   locations: { id: string; code: string; name: string }[];
   retailBalances: { productId: string; warehouseLocationId: string; available: number }[];
+  customers: SalesCustomer[];
+}
+
+export interface SalesCustomer {
+  id: string;
+  name: string;
+  companyName: string | null;
+  address: string;
+  phone: string;
+  gstNumber: string | null;
 }
 
 export interface OfflineSalesOverview {

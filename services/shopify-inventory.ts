@@ -1,6 +1,6 @@
 import "server-only";
 import { shopifyGraphQL } from "@/lib/shopify/client";
-import { INVENTORY_LEVELS_QUERY, INVENTORY_VARIANTS_QUERY } from "@/lib/shopify/queries";
+import { CATALOG_VARIANT_PRICES_QUERY, INVENTORY_LEVELS_QUERY, INVENTORY_VARIANTS_QUERY } from "@/lib/shopify/queries";
 import { getShopifyConfig } from "@/lib/validation/env";
 import type { CurrentInventoryItem, CurrentInventoryResult, ShopifyInventoryLevelConnection, ShopifyInventoryLevelNode, ShopifyPageInfo, ShopifyVariantNode } from "@/types/shopify";
 
@@ -13,6 +13,28 @@ interface VariantsResponse {
   productVariants: { nodes: ShopifyVariantNode[]; pageInfo: ShopifyPageInfo };
 }
 interface LevelsResponse { inventoryItem: { inventoryLevels: ShopifyInventoryLevelConnection } | null; }
+interface VariantPricesResponse { productVariants: { nodes: { sku: string | null; price: string; inventoryItem: { sku: string | null } | null }[]; pageInfo: ShopifyPageInfo }; }
+
+export async function fetchShopifyPricesBySku(): Promise<Map<string, number>> {
+  const prices = new Map<string, number>();
+  let cursor: string | null = null;
+  let pageInfo: ShopifyPageInfo = { hasNextPage: true, endCursor: null };
+  while (pageInfo.hasNextPage) {
+    const data = await shopifyGraphQL<VariantPricesResponse>(CATALOG_VARIANT_PRICES_QUERY, { first: 100, after: cursor });
+    for (const variant of data.productVariants.nodes) {
+      const amount = Number(variant.price);
+      if (!Number.isFinite(amount) || amount <= 0 || !/^\d+(?:\.\d{1,2})?$/.test(variant.price)) continue;
+      const pricePaisa = Math.round(amount * 100);
+      for (const rawSku of [variant.sku, variant.inventoryItem?.sku]) {
+        const sku = rawSku?.trim().toUpperCase();
+        if (sku) prices.set(sku, pricePaisa);
+      }
+    }
+    pageInfo = data.productVariants.pageInfo;
+    cursor = pageInfo.endCursor;
+  }
+  return prices;
+}
 
 async function loadRemainingLevels(inventoryItemId: string, initial: ShopifyInventoryLevelConnection): Promise<ShopifyInventoryLevelNode[]> {
   const levels = [...initial.nodes];
@@ -43,6 +65,7 @@ function normalizeLevel(variant: ShopifyVariantNode, level: ShopifyInventoryLeve
     productTitle: variant.product.title,
     variantTitle: variant.title,
     sku: inventoryItem.sku ?? variant.sku ?? null,
+    price: variant.price,
     imageUrl: imageUrl(variant),
     locationName: level.location.name,
     available,

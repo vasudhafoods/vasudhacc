@@ -193,12 +193,25 @@ export const retailRecipients = pgTable("retail_recipients", {
   ...auditColumns,
 });
 
+export const salesCustomers = pgTable("sales_customers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  companyName: text("company_name"),
+  address: text("address").notNull(),
+  phone: text("phone").notNull(),
+  gstNumber: text("gst_number"),
+  active: boolean("active").default(true).notNull(),
+  createdBy: text("created_by").notNull(),
+  ...auditColumns,
+}, (table) => [index("sales_customers_name_idx").on(table.name), index("sales_customers_company_idx").on(table.companyName)]);
+
 export const offlineSales = pgTable("offline_sales", {
   id: uuid("id").defaultRandom().primaryKey(),
   saleNumber: text("sale_number").notNull(),
   idempotencyKey: text("idempotency_key").notNull(),
   saleDate: timestamp("sale_date", { withTimezone: true }).notNull(),
   customerName: text("customer_name").notNull(),
+  customerCompanyName: text("customer_company_name"),
   customerContact: text("customer_contact"),
   billingInvoiceNumber: text("billing_invoice_number"),
   billingAddress: text("billing_address").default("").notNull(),

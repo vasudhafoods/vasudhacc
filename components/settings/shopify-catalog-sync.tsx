@@ -45,7 +45,7 @@ export function ShopifyCatalogSync({ initialStatus }: { initialStatus: Warehouse
       const webhookMessage = body.webhooks
         ? ` Shopify order automation ready (${body.webhooks.created.length} new, ${body.webhooks.existing.length} already connected).`
         : "";
-      setFlash(`Sync completed — ${body.result.distinctSkus} SKUs and ${body.result.mappedRows} inventory rows synchronized.${inventoryMessage}${webhookMessage}`);
+      setFlash(`Sync completed — ${body.result.distinctSkus} SKUs, ${body.result.pricedRows} Shopify prices, and ${body.result.mappedRows} inventory rows synchronized.${inventoryMessage}${webhookMessage}`);
       router.refresh();
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : "Shopify catalog could not be synchronized.");
@@ -77,7 +77,7 @@ export function ShopifyCatalogSync({ initialStatus }: { initialStatus: Warehouse
       <Status label="Pending Shopify writes" value={String(initialStatus.pendingShopifyUpdates)}/>
       <Status label="Failed Shopify events" value={String(initialStatus.failedShopifyWebhooks)}/>
     </div>
-    {result ? <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900"><p className="font-semibold">Catalog synchronized successfully.</p><p className="mt-1">{result.distinctSkus} SKUs · {result.mappedRows} mapped rows · {result.conflictedRows} conflicted rows · {result.skippedMissingSku} missing-SKU rows skipped</p></div> : null}
+    {result ? <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900"><p className="font-semibold">Catalog synchronized successfully.</p><p className="mt-1">{result.distinctSkus} SKUs · {result.pricedRows} Shopify prices · {result.mappedRows} mapped rows · {result.conflictedRows} conflicted rows · {result.skippedMissingSku} missing-SKU rows skipped</p></div> : null}
     {error ? <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800"><p className="font-semibold">Synchronization failed</p><p className="mt-1">{error}</p></div> : null}
     {!ready ? <p className="mt-4 text-xs text-amber-700">Database migration must be complete before catalog synchronization.</p> : null}
     </section>

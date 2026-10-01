@@ -8,6 +8,7 @@ export const INVENTORY_VARIANTS_QUERY = `#graphql
         id
         title
         sku
+        price
         media(first: 1) { nodes { preview { image { url } } } }
         product {
           id
@@ -33,6 +34,15 @@ export const INVENTORY_VARIANTS_QUERY = `#graphql
           }
         }
       }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+export const CATALOG_VARIANT_PRICES_QUERY = `#graphql
+  query CatalogVariantPrices($first: Int!, $after: String) {
+    productVariants(first: $first, after: $after, sortKey: ID) {
+      nodes { sku price inventoryItem { sku } }
       pageInfo { hasNextPage endCursor }
     }
   }

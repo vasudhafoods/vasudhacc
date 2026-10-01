@@ -11,6 +11,7 @@ export interface CatalogSyncResult {
   conflictedRows: number;
   skippedMissingSku: number;
   distinctSkus: number;
+  pricedRows: number;
 }
 
 export async function syncShopifyCatalog(): Promise<CatalogSyncResult> {
@@ -19,6 +20,7 @@ export async function syncShopifyCatalog(): Promise<CatalogSyncResult> {
   let mappedRows = 0;
   let conflictedRows = 0;
   let skippedMissingSku = 0;
+  let pricedRows = 0;
   const skus = new Set<string>();
   const inventoryItemsBySku = new Map<string, Set<string>>();
   for (const item of inventory.items) {
@@ -37,14 +39,19 @@ export async function syncShopifyCatalog(): Promise<CatalogSyncResult> {
         continue;
       }
       skus.add(sku);
+      const price = Number(item.price);
+      const unitPricePaisa = Number.isFinite(price) && price > 0 && /^\d+(?:\.\d{1,2})?$/.test(item.price) ? Math.round(price * 100) : null;
+      if (unitPricePaisa !== null) pricedRows += 1;
       const [product] = await tx.insert(products).values({
         sku,
         name: item.variantTitle === "Default Title" ? item.productTitle : `${item.productTitle} · ${item.variantTitle}`,
+        ...(unitPricePaisa !== null ? { unitPricePaisa } : {}),
         active: item.productStatus === "ACTIVE",
       }).onConflictDoUpdate({
         target: products.sku,
         set: {
           name: item.variantTitle === "Default Title" ? item.productTitle : `${item.productTitle} · ${item.variantTitle}`,
+          ...(unitPricePaisa !== null ? { unitPricePaisa } : {}),
           active: item.productStatus === "ACTIVE",
           updatedAt: new Date(),
         },
@@ -89,5 +96,6 @@ export async function syncShopifyCatalog(): Promise<CatalogSyncResult> {
     conflictedRows,
     skippedMissingSku,
     distinctSkus: skus.size,
+    pricedRows,
   };
 }
