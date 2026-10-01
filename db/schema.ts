@@ -281,7 +281,7 @@ export const offlineSaleDocuments = pgTable("offline_sale_documents", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index("offline_sale_documents_sale_idx").on(table.offlineSaleId),
-  check("offline_sale_documents_kind_valid", sql`${table.kind} IN ('invoice', 'payment_proof', 'tracking_slip')`),
+  check("offline_sale_documents_kind_valid", sql`${table.kind} IN ('invoice', 'payment_proof', 'tracking_slip', 'proof_of_delivery')`),
   check("offline_sale_documents_file_size_positive", sql`${table.fileSize} > 0`),
 ]);
 

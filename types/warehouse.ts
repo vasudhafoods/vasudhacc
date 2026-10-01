@@ -53,7 +53,7 @@ export interface WarehouseWorkspaceData {
   salesOrdersMigrationPending: boolean;
   shopifyOrders: ShopifyWarehouseOrder[];
   shopifyOrdersError: string | null;
-  trackingSlips: Record<string, { fileName: string; url: string }>;
+  orderDocuments: Record<string, { fileName: string; url: string }>;
 }
 
 export interface ShopifyWarehouseOrder {

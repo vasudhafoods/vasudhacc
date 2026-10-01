@@ -69,8 +69,8 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
       db.select().from(offlineSales).orderBy(desc(offlineSales.saleDate)).limit(200),
       db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
     ]).then(async ([orders, paymentRows]) => {
-      const documentRows = await db.select({ offlineSaleId: offlineSaleDocuments.offlineSaleId, fileName: offlineSaleDocuments.fileName, id: offlineSaleDocuments.id })
-        .from(offlineSaleDocuments).where(eq(offlineSaleDocuments.kind, "tracking_slip"));
+      const documentRows = await db.select({ offlineSaleId: offlineSaleDocuments.offlineSaleId, kind: offlineSaleDocuments.kind, fileName: offlineSaleDocuments.fileName, id: offlineSaleDocuments.id })
+        .from(offlineSaleDocuments).where(inArray(offlineSaleDocuments.kind, ["tracking_slip", "proof_of_delivery"])).orderBy(desc(offlineSaleDocuments.createdAt));
       return { orders, paymentRows, documentRows, migrationPending: false };
     }).catch((error: unknown) => {
       let cause = error as { code?: string; cause?: unknown };
@@ -216,9 +216,12 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     const collected = Math.min(sale.totalAmountPaisa, collectedBySale.get(sale.id) ?? 0);
     return { id: sale.id, saleNumber: sale.saleNumber, saleDate: sale.saleDate.toISOString(), customerName: sale.customerName, customerCompanyName: sale.customerCompanyName, customerContact: sale.customerContact, billingInvoiceNumber: sale.billingInvoiceNumber, billingAddress: sale.billingAddress, shippingAddress: sale.shippingAddress, shippingSameAsBilling: sale.shippingSameAsBilling, gstNumber: sale.gstNumber, customerType: sale.customerType as "retail" | "b2b", isNewB2bCustomer: sale.isNewB2bCustomer, totalAmountPaisa: sale.totalAmountPaisa, subtotalAmountPaisa: sale.subtotalAmountPaisa, discountPaisa: sale.discountPaisa, taxPaisa: sale.taxPaisa, collectedAmountPaisa: collected, pendingAmountPaisa: sale.totalAmountPaisa - collected, paymentStatus: collected <= 0 ? "pending" as const : collected >= sale.totalAmountPaisa ? "paid" as const : "partial" as const, reference: sale.reference, notes: sale.notes, orderType: sale.orderType, requestedDispatchDate: sale.requestedDispatchDate, location: sale.location, deliveryStatus: sale.deliveryStatus, deliveryPartner: sale.deliveryPartner, deliveryCostPaisa: sale.deliveryCostPaisa, lrNumber: sale.lrNumber, trackingUrl: sale.trackingUrl, warehouseLocationId: sale.warehouseLocationId, expectedNextPaymentDate: sale.expectedNextPaymentDate, lines: sale.lines, createdBy: sale.createdBy };
   });
-  const trackingSlips = Object.fromEntries(salesOrderData.documentRows.map((document) => [document.offlineSaleId, { fileName: document.fileName, url: `/api/offline-sales/${document.offlineSaleId}/documents/${document.id}` }]));
+  const orderDocuments = Object.fromEntries([...salesOrderData.documentRows].reverse().map((document) => [
+    `${document.offlineSaleId}:${document.kind}`,
+    { fileName: document.fileName, url: `/api/offline-sales/${document.offlineSaleId}/documents/${document.id}` },
+  ]));
 
-  return { products: productOptions, locations: locationRows, retailBalances, balances, expiries, activities, salesOrders, salesOrdersMigrationPending: salesOrderData.migrationPending, shopifyOrders: shopifyOrderData.orders, shopifyOrdersError: shopifyOrderData.error, trackingSlips };
+  return { products: productOptions, locations: locationRows, retailBalances, balances, expiries, activities, salesOrders, salesOrdersMigrationPending: salesOrderData.migrationPending, shopifyOrders: shopifyOrderData.orders, shopifyOrdersError: shopifyOrderData.error, orderDocuments };
 }
 
 export async function createWarehouseProduct(input: {

@@ -71,6 +71,13 @@
       "when": 1790895000000,
       "tag": "0009_warehouse_orders_fulfillment",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790895900000,
+      "tag": "0010_delivery_proof_documents",
+      "breakpoints": true
     }
   ]
 }

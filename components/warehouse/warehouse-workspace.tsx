@@ -524,7 +524,7 @@ export function WarehouseWorkspace({ user, initialData }: {
       </div>
     </section> : null}
 
-    {panel === "orders" ? <WarehouseOrdersPanel salesOrders={initialData.salesOrders} shopifyOrders={initialData.shopifyOrders} shopifyOrdersError={initialData.shopifyOrdersError} migrationPending={initialData.salesOrdersMigrationPending} slips={initialData.trackingSlips}/> : null}
+    {panel === "orders" ? <WarehouseOrdersPanel salesOrders={initialData.salesOrders} shopifyOrders={initialData.shopifyOrders} shopifyOrdersError={initialData.shopifyOrdersError} migrationPending={initialData.salesOrdersMigrationPending} documents={initialData.orderDocuments}/> : null}
 
     {panel === "receive" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{receiptStep === "edit" ? "Step 1 of 2 · Enter" : receiptStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{receiptStep === "success" ? "Stock submitted successfully" : "Receive new stock"}</h2></div>
