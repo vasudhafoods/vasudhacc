@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { DASHBOARD_SESSION_COOKIE, readDashboardSession } from "@/lib/auth/session";
-import { isManagementRole, isWarehouseRole } from "@/types/auth";
+import { isManagementRole, isRetailSalesRole, isWarehouseRole } from "@/types/auth";
 
 const INTERNAL_BEARER_ROUTES = ["/api/cron/inventory", "/api/inventory", "/api/inventory/history"];
 const SIGNED_PUBLIC_ROUTES = ["/api/shopify/webhooks"];
@@ -15,7 +15,7 @@ export async function proxy(request: NextRequest) {
   const session = await readDashboardSession(request.cookies.get(DASHBOARD_SESSION_COOKIE)?.value);
   if (isLoginRoute) {
     if ((pathname === "/login" || pathname === "/forgot-password") && session) {
-      return NextResponse.redirect(new URL(isWarehouseRole(session.role) ? "/warehouse" : "/", request.url));
+      return NextResponse.redirect(new URL(isWarehouseRole(session.role) ? "/warehouse" : isRetailSalesRole(session.role) ? "/sales" : "/", request.url));
     }
     return NextResponse.next();
   }
@@ -25,6 +25,13 @@ export async function proxy(request: NextRequest) {
       return NextResponse.json({ error: { code: "FORBIDDEN", message: "Warehouse access is limited to stock intake, retail dispatches, and product creation." } }, { status: 403 });
     }
     return NextResponse.redirect(new URL("/warehouse", request.url));
+  }
+  if (session && isRetailSalesRole(session.role)) {
+    if (pathname === "/sales" || pathname.startsWith("/sales/") || pathname === "/api/offline-sales" || pathname.startsWith("/api/offline-sales/")) return NextResponse.next();
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: { code: "FORBIDDEN", message: "Sales access is limited to the sales workspace and offline sales orders." } }, { status: 403 });
+    }
+    return NextResponse.redirect(new URL("/sales", request.url));
   }
   if (session && isManagementRole(session.role)) return NextResponse.next();
 
