@@ -25,6 +25,7 @@ export interface OfflineSaleRow {
   reference: string | null;
   notes: string | null;
   orderType: string;
+  requestedDispatchDate?: string | null;
   location: string | null;
   deliveryStatus: string;
   deliveryPartner: string | null;

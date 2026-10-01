@@ -57,6 +57,13 @@
       "when": 1790890000000,
       "tag": "0007_sales_customers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790892300000,
+      "tag": "0008_requested_dispatch_date",
+      "breakpoints": true
     }
   ]
 }

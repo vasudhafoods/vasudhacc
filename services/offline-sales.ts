@@ -67,6 +67,7 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     reference: sale.reference,
     notes: sale.notes,
     orderType: sale.orderType,
+    requestedDispatchDate: sale.requestedDispatchDate,
     location: sale.location,
     deliveryStatus: sale.deliveryStatus,
     deliveryPartner: sale.deliveryPartner,
@@ -179,6 +180,7 @@ export async function createOfflineSale(input: {
   reference?: string;
   notes?: string;
   orderType?: string;
+  requestedDispatchDate?: string;
   location?: string;
   deliveryStatus?: string;
   deliveryPartner?: string;
@@ -202,6 +204,8 @@ export async function createOfflineSale(input: {
   if (gstNumber && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstNumber.toUpperCase())) throw new OfflineSalesError("INVALID_SALE", "Enter a valid GSTIN or leave it blank for an unregistered customer.");
   const reference = text(input.reference, "Invoice / reference", 2, 120);
   const notes = text(input.notes, "Notes", 2, 1_000);
+  const requestedDispatchDate = input.requestedDispatchDate?.trim() || null;
+  if (requestedDispatchDate) saleDate(requestedDispatchDate);
   if (input.customerType !== "retail" && input.customerType !== "b2b") throw new OfflineSalesError("INVALID_SALE", "Select Retail or B2B customer.");
   if (!input.warehouseLocationId) throw new OfflineSalesError("INVALID_SALE", "Select the warehouse that will prepare this order.");
   const uniqueProducts = new Set<string>();
@@ -288,6 +292,7 @@ export async function createOfflineSale(input: {
       reference,
       notes,
       orderType: input.orderType ?? "retail",
+      requestedDispatchDate,
       location: input.location?.trim() || null,
       deliveryStatus: input.deliveryStatus ?? "packing",
       deliveryPartner: input.deliveryPartner?.trim() || null,
@@ -322,7 +327,7 @@ export async function createOfflineSale(input: {
       action: "offline_sale.created",
       entityType: "offline_sale",
       entityId: sale.id,
-      newValue: { saleNumber, billingInvoiceNumber, customerName, customerCompanyName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, status: "packing", reservedProductCount: lines.length },
+      newValue: { saleNumber, billingInvoiceNumber, customerName, customerCompanyName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, requestedDispatchDate, status: "packing", reservedProductCount: lines.length },
       reason: "Offline sales order raised; Retail stock reserved for warehouse preparation",
     });
     return { sale: toRow(sale, input.initialCollectionPaisa), duplicate: false };

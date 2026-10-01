@@ -227,6 +227,7 @@ export const offlineSales = pgTable("offline_sales", {
   reference: text("reference"),
   notes: text("notes"),
   orderType: text("order_type").default("retail").notNull(),
+  requestedDispatchDate: text("requested_dispatch_date"),
   deliveryStatus: text("delivery_status").default("packing").notNull(),
   location: text("location"),
   deliveryPartner: text("delivery_partner"),
