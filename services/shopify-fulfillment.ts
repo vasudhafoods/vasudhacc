@@ -15,14 +15,14 @@ interface ShopifyOrderNode {
   totalPriceSet: { shopMoney: Money };
   shippingAddress: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
   lineItems: { nodes: { currentQuantity: number }[] };
-  fulfillments: { nodes: { updatedAt: string; displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[] };
+  fulfillments: { updatedAt: string; displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[];
 }
 interface OrdersResponse { orders: { nodes: ShopifyOrderNode[]; pageInfo: ShopifyPageInfo } }
 type ShopifyFulfillmentOrderConnection = { nodes: { id: string; status: string; lineItems: { nodes: { remainingQuantity: number }[] } }[] };
 
 function mapOrder(order: ShopifyOrderNode): ShopifyWarehouseOrder {
   const address = order.shippingAddress;
-  const activeFulfillments = order.fulfillments.nodes.filter((fulfillment) => fulfillment.displayStatus !== "CANCELED");
+  const activeFulfillments = order.fulfillments.filter((fulfillment) => fulfillment.displayStatus !== "CANCELED");
   const latestFulfillment = [...activeFulfillments].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
   const trackingInfo = activeFulfillments.flatMap((fulfillment) => fulfillment.trackingInfo);
   const fulfillmentDisplayStatus = latestFulfillment?.displayStatus;

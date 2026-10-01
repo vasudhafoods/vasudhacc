@@ -119,13 +119,7 @@ export const WAREHOUSE_ORDERS_QUERY = `#graphql
         totalPriceSet { shopMoney { amount currencyCode } }
         shippingAddress { name address1 address2 city province zip country }
         lineItems(first: 25) { nodes { currentQuantity } }
-        fulfillments(first: 5) {
-          nodes {
-            updatedAt
-            displayStatus
-            trackingInfo { company number url }
-          }
-        }
+        fulfillments { updatedAt displayStatus trackingInfo { company number url } }
       }
       pageInfo { hasNextPage endCursor }
     }
