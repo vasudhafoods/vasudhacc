@@ -9,15 +9,26 @@ interface ShopifyOrderNode {
   id: string;
   name: string;
   createdAt: string;
+  attribution: { displayName: string } | null;
+  displayFinancialStatus: string | null;
+  displayFulfillmentStatus: string;
   totalPriceSet: { shopMoney: Money };
   shippingAddress: { name: string | null; address1: string | null; address2: string | null; city: string | null; province: string | null; zip: string | null; country: string | null } | null;
-  lineItems: { nodes: { title: string; sku: string | null; quantity: number; currentQuantity: number }[] };
-  fulfillmentOrders: { nodes: { id: string; status: string; lineItems: { nodes: { remainingQuantity: number }[] } }[] };
+  lineItems: { nodes: { currentQuantity: number }[] };
+  fulfillments: { nodes: { updatedAt: string; displayStatus: string | null; trackingInfo: { company: string | null; number: string | null; url: string | null }[] }[] };
 }
 interface OrdersResponse { orders: { nodes: ShopifyOrderNode[]; pageInfo: ShopifyPageInfo } }
+type ShopifyFulfillmentOrderConnection = { nodes: { id: string; status: string; lineItems: { nodes: { remainingQuantity: number }[] } }[] };
 
 function mapOrder(order: ShopifyOrderNode): ShopifyWarehouseOrder {
   const address = order.shippingAddress;
+  const activeFulfillments = order.fulfillments.nodes.filter((fulfillment) => fulfillment.displayStatus !== "CANCELED");
+  const latestFulfillment = [...activeFulfillments].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+  const trackingInfo = activeFulfillments.flatMap((fulfillment) => fulfillment.trackingInfo);
+  const fulfillmentDisplayStatus = latestFulfillment?.displayStatus;
+  const deliveryStatus = fulfillmentDisplayStatus && !["FULFILLED", "MARKED_AS_FULFILLED"].includes(fulfillmentDisplayStatus)
+    ? fulfillmentDisplayStatus
+    : trackingInfo.length ? "TRACKING_ADDED" : null;
   return {
     id: order.id,
     name: order.name,
@@ -26,8 +37,12 @@ function mapOrder(order: ShopifyOrderNode): ShopifyWarehouseOrder {
     destination: [address?.address1, address?.address2, address?.city, address?.province, address?.zip, address?.country].filter(Boolean).join(", "),
     total: order.totalPriceSet.shopMoney.amount,
     currency: order.totalPriceSet.shopMoney.currencyCode,
-    fulfillmentOrders: order.fulfillmentOrders.nodes.map((fo) => ({ id: fo.id, status: fo.status, remainingQuantity: fo.lineItems.nodes.reduce((sum, item) => sum + item.remainingQuantity, 0) })).filter((fo) => fo.remainingQuantity > 0 && ["OPEN", "IN_PROGRESS"].includes(fo.status)),
-    lines: order.lineItems.nodes.filter((line) => line.currentQuantity > 0).map((line) => ({ title: line.title, sku: line.sku, quantity: line.currentQuantity })),
+    fulfillmentStatus: order.displayFulfillmentStatus,
+    financialStatus: order.displayFinancialStatus,
+    deliveryStatus,
+    sourceName: order.attribution?.displayName || "Shopify",
+    trackingInfo,
+    itemCount: order.lineItems.nodes.reduce((total, line) => total + Math.max(0, line.currentQuantity), 0),
   };
 }
 
@@ -35,13 +50,12 @@ export async function getShopifyWarehouseOrders(): Promise<ShopifyWarehouseOrder
   const orders: ShopifyWarehouseOrder[] = [];
   let pageInfo: ShopifyPageInfo = { hasNextPage: true, endCursor: null };
   let pages = 0;
-  while (pageInfo.hasNextPage && pages++ < 4) {
+  while (pageInfo.hasNextPage && pages++ < 2) {
     const data = await shopifyGraphQL<OrdersResponse>(WAREHOUSE_ORDERS_QUERY, {
-      first: 50,
+      first: 25,
       after: pageInfo.endCursor,
-      query: "status:open",
     });
-    orders.push(...data.orders.nodes.map(mapOrder).filter((order) => order.fulfillmentOrders.length > 0));
+    orders.push(...data.orders.nodes.map(mapOrder));
     pageInfo = data.orders.pageInfo;
   }
   return orders;
@@ -59,7 +73,7 @@ const FULFILLMENT_TARGET_QUERY = `#graphql
   }
 `;
 
-interface FulfillmentTargetResponse { order: { id: string; name: string; fulfillmentOrders: OrdersResponse["orders"]["nodes"][number]["fulfillmentOrders"] } | null }
+interface FulfillmentTargetResponse { order: { id: string; name: string; fulfillmentOrders: ShopifyFulfillmentOrderConnection } | null }
 interface FulfillmentCreateResponse { fulfillmentCreate: { fulfillment: { id: string; status: string; trackingInfo: { company: string | null; number: string | null; url: string | null }[] } | null } }
 
 export async function fulfillShopifyWarehouseOrder(input: { orderId: string; trackingNumber: string; carrier: string; trackingUrl?: string; notifyCustomer: boolean }) {

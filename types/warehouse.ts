@@ -64,6 +64,10 @@ export interface ShopifyWarehouseOrder {
   destination: string;
   total: string;
   currency: string;
-  fulfillmentOrders: { id: string; status: string; remainingQuantity: number }[];
-  lines: { title: string; sku: string | null; quantity: number }[];
+  fulfillmentStatus: string;
+  financialStatus: string | null;
+  deliveryStatus: string | null;
+  sourceName: string;
+  trackingInfo: { company: string | null; number: string | null; url: string | null }[];
+  itemCount: number;
 }

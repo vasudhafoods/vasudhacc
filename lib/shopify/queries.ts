@@ -107,21 +107,23 @@ export const ORDERS_QUERY = `#graphql
 `;
 
 export const WAREHOUSE_ORDERS_QUERY = `#graphql
-  query WarehouseOrders($first: Int!, $after: String, $query: String!) {
-    orders(first: $first, after: $after, sortKey: PROCESSED_AT, reverse: true, query: $query) {
+  query WarehouseOrders($first: Int!, $after: String) {
+    orders(first: $first, after: $after, sortKey: PROCESSED_AT, reverse: true) {
       nodes {
         id
         name
         createdAt
+        attribution { displayName }
         displayFinancialStatus
+        displayFulfillmentStatus
         totalPriceSet { shopMoney { amount currencyCode } }
         shippingAddress { name address1 address2 city province zip country }
-        lineItems(first: 100) { nodes { title sku quantity currentQuantity } }
-        fulfillmentOrders(first: 20) {
+        lineItems(first: 25) { nodes { currentQuantity } }
+        fulfillments(first: 5) {
           nodes {
-            id
-            status
-            lineItems(first: 100) { nodes { remainingQuantity } }
+            updatedAt
+            displayStatus
+            trackingInfo { company number url }
           }
         }
       }
