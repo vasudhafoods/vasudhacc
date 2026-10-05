@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { OrderAmendments } from "./order-amendments";
 import { SalesProductForm } from "./sales-product-form";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
+import type { ExtractedInvoice } from "@/services/invoice-extract";
 import type { OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 type Line = { productId: string; quantity: string; unitPrice: string; gstRate: string; discount: string };
@@ -45,6 +46,8 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   const [invoiceDiscountMode, setInvoiceDiscountMode] = useState<"percent" | "amount">("percent");
   const [invoiceDiscountInput, setInvoiceDiscountInput] = useState("0");
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [readingInvoice, setReadingInvoice] = useState(false);
+  const [invoiceReadMessage, setInvoiceReadMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentMode, setPaymentMode] = useState("upi");
   const [transactionId, setTransactionId] = useState("");
@@ -120,6 +123,67 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   }, [lines, invoiceDiscountMode, invoiceDiscountInput]);
   const paymentPaisa = paisa(paymentAmount);
   const available = (productId: string) => entryData.retailBalances.find((row) => row.productId === productId && row.warehouseLocationId === locationId)?.available ?? 0;
+  async function readInvoice(file: File) {
+    setInvoiceFile(file); setReadingInvoice(true); setInvoiceReadMessage(null);
+    try {
+      const form = new FormData(); form.set("file", file);
+      const response = await fetch("/api/offline-sales/invoice-extract", { method: "POST", body: form });
+      const body = await response.json() as { invoice?: ExtractedInvoice; error?: { message?: string } };
+      if (!response.ok || !body.invoice) throw new Error(body.error?.message ?? "The invoice could not be read. Enter the details manually.");
+      const invoice = body.invoice;
+      if (invoice.invoiceNumber) setInvoiceNo(invoice.invoiceNumber);
+      if (invoice.invoiceDate && /^\d{4}-\d{2}-\d{2}$/.test(invoice.invoiceDate)) setDate(invoice.invoiceDate);
+      const gst = invoice.buyerGstin?.replace(/\s/g, "").toUpperCase() ?? "";
+      const buyer = (invoice.buyerName ?? "").trim().toLowerCase();
+      const saved = customers.find(item => (gst && item.gstNumber?.toUpperCase() === gst) || (buyer && (item.name.trim().toLowerCase() === buyer || item.companyName?.trim().toLowerCase() === buyer)));
+      if (saved) selectCustomer(saved.id);
+      else {
+        setSelectedCustomerId("");
+        if (invoice.buyerName) setCustomer(invoice.buyerName);
+        setCompanyName(invoice.buyerCompanyName ?? "");
+        if (invoice.buyerAddress) setBilling(invoice.buyerAddress);
+        if (invoice.buyerPhone) setContact(invoice.buyerPhone);
+        setGstin(gst.slice(0, 15));
+        const shippingAddress = invoice.shippingAddress?.trim();
+        setSameAddress(!shippingAddress || shippingAddress === invoice.buyerAddress?.trim());
+        setShipping(shippingAddress || invoice.buyerAddress || "");
+      }
+      const unmatched: string[] = [];
+      const nextLines = invoice.lines.flatMap((item): Line[] => {
+        const gstPercent = [0, 5, 12, 18, 28].includes(item.gstPercent ?? -1) ? item.gstPercent! : 0;
+        const rateInclusive = item.rateInclusive ?? (item.rate != null ? item.rate * (1 + gstPercent / 100) : null);
+        const listPrice = (entryData.products.find(product => product.id === item.productId)?.unitPricePaisa ?? 0) / 100;
+        if (!item.productId) unmatched.push(item.description);
+        let unitPrice = listPrice, discount = 0;
+        if (rateInclusive != null && listPrice > 0 && rateInclusive <= listPrice) discount = Math.round((1 - rateInclusive / listPrice) * 10_000) / 100;
+        else if (rateInclusive != null) {
+          const invoiceDiscount = Math.min(99, Math.max(0, item.discountPercent ?? 0));
+          unitPrice = listPrice > 0 && rateInclusive > listPrice ? rateInclusive : rateInclusive / (1 - invoiceDiscount / 100);
+          discount = listPrice > 0 && rateInclusive > listPrice ? 0 : invoiceDiscount;
+        }
+        const quantity = Math.max(1, Math.round(item.quantity));
+        return [{ productId: item.productId ?? "", quantity: String(quantity), unitPrice: unitPrice > 0 ? unitPrice.toFixed(2) : "", gstRate: String(gstPercent), discount: String(discount) }];
+      });
+      if (nextLines.length) setLines(nextLines);
+      setInvoiceDiscountMode("percent"); setInvoiceDiscountInput("0");
+      const ours = calculateInvoice(nextLines.map(line => {
+        const quantity = Number(line.quantity) || 0, base = quantity * paisa(line.unitPrice);
+        return { quantity, unitPricePaisa: paisa(line.unitPrice), gstRateBps: Number(line.gstRate) * 100, discountPaisa: percentageDiscountPaisa(base, line.discount) };
+      })).totalAmountPaisa;
+      const theirs = invoice.totalAmount != null ? Math.round(invoice.totalAmount * 100) : null;
+      const problems = [
+        ...(unmatched.length ? [`Choose the product for: ${unmatched.join(", ")}.`] : []),
+        ...(theirs != null && theirs !== ours ? [`Invoice total ${money(theirs)} but the order calculates ${money(ours)} - check prices and discounts.`] : []),
+      ];
+      setInvoiceReadMessage(problems.length
+        ? { tone: "warn", text: `Invoice read. ${problems.join(" ")}` }
+        : { tone: "ok", text: `Invoice read and details filled in. Total ${money(ours)} matches the invoice.` });
+    } catch (caught) {
+      setInvoiceReadMessage({ tone: "warn", text: caught instanceof Error ? caught.message : "The invoice could not be read. Enter the details manually." });
+    } finally {
+      setReadingInvoice(false);
+    }
+  }
   function updateLine(index: number, key: keyof Line, value: string) {
     setLines(current => current.map((line, i) => i === index ? { ...line, [key]: value, ...(key === "productId" ? { unitPrice: ((entryData.products.find(p => p.id === value)?.unitPricePaisa ?? 0) / 100).toFixed(2) } : {}) } : line));
   }
@@ -173,6 +237,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
     {activeTab === "create" ? <>
     <SalesProductForm/>
     <form onSubmit={submit} className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+      <section className="rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/60 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold text-slate-900">Auto-fill from invoice</h2><p className="mt-1 text-xs text-slate-600">Upload the accounts invoice (PDF or photo, up to 3 MB). Invoice number, date, customer, GSTIN and products are filled in for you to check.</p></div><button type="button" disabled={readingInvoice} onClick={()=>invoiceInputRef.current?.click()} className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-60">{readingInvoice?"Reading invoice…":"Upload invoice"}</button></div>{invoiceReadMessage?<p role="status" className={`mt-3 rounded-lg px-3 py-2 text-sm font-medium ${invoiceReadMessage.tone==="ok"?"bg-emerald-100 text-emerald-900":"bg-amber-100 text-amber-900"}`}>{invoiceReadMessage.text}</p>:null}</section>
       <section><h2 className="text-lg font-bold text-slate-900">Invoice and customer</h2><div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-64 flex-1 text-sm font-semibold">Use saved customer<select className={input} value={selectedCustomerId} onChange={e=>selectCustomer(e.target.value)}><option value="">New / enter customer details</option>{customers.map(item=><option key={item.id} value={item.id}>{item.companyName ? `${item.companyName} · ${item.name}` : item.name} · {item.phone}</option>)}</select></label><button type="button" onClick={()=>{setCustomerError("");setShowCustomerForm(true);}} className="h-11 rounded-lg border border-blue-300 bg-white px-4 text-sm font-bold text-blue-800">+ Create customer</button></div><div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <label className="text-sm font-semibold">Order date<input className={input} type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>
         <label className="text-sm font-semibold">Requested dispatch by <span className="font-normal text-slate-500">optional</span><input className={input} type="date" min={date} value={requestedDispatchDate} onChange={e=>setRequestedDispatchDate(e.target.value)}/></label>
@@ -196,7 +261,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
           <button type="button" disabled={lines.length===1} onClick={()=>setLines(current=>current.filter((_,i)=>i!==index))} className="h-11 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-600 disabled:opacity-40">Remove</button>
         </div>)}</div>
       </section>
-      <section className="grid gap-5 lg:grid-cols-[1fr_320px]"><div className="rounded-xl border border-slate-200 p-4"><h2 className="font-bold text-slate-900">Invoice copy</h2><p className="mt-1 text-xs text-slate-500">PDF, JPG, PNG, or WebP; up to 3 MB.</p><input ref={invoiceInputRef} id="invoice-copy-file" className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setInvoiceFile(e.target.files?.[0]??null)}/><div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" aria-controls="invoice-copy-file" onClick={()=>invoiceInputRef.current?.click()} className="rounded-lg border border-emerald-700 bg-emerald-50 px-4 py-2.5 text-sm font-bold text-emerald-900 hover:bg-emerald-100">+ Add invoice file</button>{invoiceFile?<div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"><span className="max-w-64 truncate">{invoiceFile.name}</span><button type="button" onClick={()=>{setInvoiceFile(null);if(invoiceInputRef.current)invoiceInputRef.current.value="";}} className="font-bold text-rose-700" aria-label="Remove invoice file">Remove</button></div>:<span className="text-sm text-slate-500">No invoice file added</span>}</div></div><div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm"><div className="mb-4 rounded-lg border border-slate-200 bg-white p-3"><label className="text-xs font-semibold text-slate-600">Extra invoice discount</label><div className="mt-2 grid grid-cols-[90px_1fr] overflow-hidden rounded-lg border border-slate-300"><select aria-label="Extra discount type" className="h-10 border-r border-slate-300 bg-slate-50 px-2 text-sm" value={invoiceDiscountMode} onChange={e=>setInvoiceDiscountMode(e.target.value as "percent"|"amount")}><option value="percent">%</option><option value="amount">₹</option></select><input aria-label="Extra invoice discount" className="h-10 min-w-0 px-3 text-sm outline-none" type="number" min="0" max={invoiceDiscountMode==="percent"?"100":undefined} step={invoiceDiscountMode==="percent"?"0.01":"0.01"} value={invoiceDiscountInput} onChange={e=>setInvoiceDiscountInput(e.target.value)}/></div></div><p className="flex justify-between"><span>Subtotal</span><b>{money(totals.subtotalAmountPaisa)}</b></p><p className="mt-2 flex justify-between"><span>Product discounts</span><b>−{money(totals.productDiscountPaisa)}</b></p><p className="mt-2 flex justify-between"><span>Extra invoice discount</span><b>−{money(totals.invoiceDiscountPaisa)}</b></p><p className="mt-3 flex justify-between border-t pt-3"><span>Taxable value</span><b>{money(totals.taxablePaisa)}</b></p>{totals.slabs.filter(slab=>slab.gstRateBps>0).map(slab=><div key={slab.gstRateBps}><p className="mt-2 flex justify-between"><span>CGST @{slab.gstRateBps/200}%</span><b>{money(slab.cgstPaisa)}</b></p><p className="mt-2 flex justify-between"><span>SGST @{slab.gstRateBps/200}%</span><b>{money(slab.sgstPaisa)}</b></p></div>)}<p className="mt-2 flex justify-between"><span>Round off</span><b>{money(totals.roundOffPaisa)}</b></p><p className="mt-3 flex justify-between border-t pt-3 text-base"><span>Final amount</span><b>{money(totals.totalAmountPaisa)}</b></p></div></section>
+      <section className="grid gap-5 lg:grid-cols-[1fr_320px]"><div className="rounded-xl border border-slate-200 p-4"><h2 className="font-bold text-slate-900">Invoice copy</h2><p className="mt-1 text-xs text-slate-500">PDF, JPG, PNG, or WebP; up to 3 MB.</p><input ref={invoiceInputRef} id="invoice-copy-file" className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>{const file=e.target.files?.[0];if(file)void readInvoice(file);else setInvoiceFile(null);}}/><div className="mt-4 flex flex-wrap items-center gap-3"><button type="button" aria-controls="invoice-copy-file" onClick={()=>invoiceInputRef.current?.click()} className="rounded-lg border border-emerald-700 bg-emerald-50 px-4 py-2.5 text-sm font-bold text-emerald-900 hover:bg-emerald-100">+ Add invoice file</button>{invoiceFile?<div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"><span className="max-w-64 truncate">{invoiceFile.name}</span><button type="button" onClick={()=>{setInvoiceFile(null);if(invoiceInputRef.current)invoiceInputRef.current.value="";}} className="font-bold text-rose-700" aria-label="Remove invoice file">Remove</button></div>:<span className="text-sm text-slate-500">No invoice file added</span>}</div></div><div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm"><div className="mb-4 rounded-lg border border-slate-200 bg-white p-3"><label className="text-xs font-semibold text-slate-600">Extra invoice discount</label><div className="mt-2 grid grid-cols-[90px_1fr] overflow-hidden rounded-lg border border-slate-300"><select aria-label="Extra discount type" className="h-10 border-r border-slate-300 bg-slate-50 px-2 text-sm" value={invoiceDiscountMode} onChange={e=>setInvoiceDiscountMode(e.target.value as "percent"|"amount")}><option value="percent">%</option><option value="amount">₹</option></select><input aria-label="Extra invoice discount" className="h-10 min-w-0 px-3 text-sm outline-none" type="number" min="0" max={invoiceDiscountMode==="percent"?"100":undefined} step={invoiceDiscountMode==="percent"?"0.01":"0.01"} value={invoiceDiscountInput} onChange={e=>setInvoiceDiscountInput(e.target.value)}/></div></div><p className="flex justify-between"><span>Subtotal</span><b>{money(totals.subtotalAmountPaisa)}</b></p><p className="mt-2 flex justify-between"><span>Product discounts</span><b>−{money(totals.productDiscountPaisa)}</b></p><p className="mt-2 flex justify-between"><span>Extra invoice discount</span><b>−{money(totals.invoiceDiscountPaisa)}</b></p><p className="mt-3 flex justify-between border-t pt-3"><span>Taxable value</span><b>{money(totals.taxablePaisa)}</b></p>{totals.slabs.filter(slab=>slab.gstRateBps>0).map(slab=><div key={slab.gstRateBps}><p className="mt-2 flex justify-between"><span>CGST @{slab.gstRateBps/200}%</span><b>{money(slab.cgstPaisa)}</b></p><p className="mt-2 flex justify-between"><span>SGST @{slab.gstRateBps/200}%</span><b>{money(slab.sgstPaisa)}</b></p></div>)}<p className="mt-2 flex justify-between"><span>Round off</span><b>{money(totals.roundOffPaisa)}</b></p><p className="mt-3 flex justify-between border-t pt-3 text-base"><span>Final amount</span><b>{money(totals.totalAmountPaisa)}</b></p></div></section>
       <section className="rounded-xl border border-slate-200 p-4"><h2 className="font-bold text-slate-900">Payment</h2><p className="mt-1 text-xs text-slate-500">Leave amount received as zero if payment is pending. Partial collections need an expected next payment date.</p><div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3"><label className="text-sm font-semibold">Amount received now ₹<input className={input} type="number" min="0" step="0.01" value={paymentAmount} onChange={e=>setPaymentAmount(e.target.value)}/></label>{paymentPaisa>0?<><label className="text-sm font-semibold">Mode<select className={input} value={paymentMode} onChange={e=>setPaymentMode(e.target.value)}><option value="upi">UPI</option><option value="bank_transfer">Bank transfer</option><option value="cash">Cash</option><option value="card">Card</option><option value="cheque">Cheque</option><option value="other">Other</option></select></label><label className="text-sm font-semibold">Transaction ID {paymentMode==="cash"?"(optional)":""}<input className={input} value={transactionId} onChange={e=>setTransactionId(e.target.value)} required={paymentMode!=="cash"}/></label><label className="text-sm font-semibold">Received by<input className={input} value={receiver} onChange={e=>setReceiver(e.target.value)} required/></label><div className="text-sm font-semibold"><span>Payment proof</span><p className="mt-1 text-xs font-normal text-slate-500">PDF, JPG, PNG, or WebP; up to 3 MB.</p><input ref={proofInputRef} id="payment-proof-file" className="sr-only" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={e=>setProof(e.target.files?.[0]??null)}/><div className="mt-2 flex flex-wrap items-center gap-3"><button type="button" aria-controls="payment-proof-file" onClick={()=>proofInputRef.current?.click()} className="rounded-lg border border-emerald-700 bg-emerald-50 px-4 py-2.5 text-sm font-bold text-emerald-900 hover:bg-emerald-100">+ Add payment proof file</button>{proof?<div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700"><span className="max-w-56 truncate">{proof.name}</span><button type="button" onClick={()=>{setProof(null);if(proofInputRef.current)proofInputRef.current.value="";}} className="font-bold text-rose-700" aria-label="Remove payment proof file">Remove</button></div>:<span className="text-xs font-normal text-slate-500">No proof file added</span>}</div></div>{paymentPaisa<totals.totalAmountPaisa?<label className="text-sm font-semibold">Next payment expected<input className={input} type="date" value={nextPaymentDate} onChange={e=>setNextPaymentDate(e.target.value)} required/></label>:null}</>:null}</div><p className="mt-3 text-sm font-semibold text-slate-700">Status: {paymentPaisa<=0?"Pending":paymentPaisa>=totals.totalAmountPaisa?"Paid":"Partially paid"} · Remaining {money(Math.max(0,totals.totalAmountPaisa-paymentPaisa))}</p></section>
       <div className="flex justify-end"><button type="submit" disabled={busy||!entryData.locations.length||!entryData.products.length} className="h-12 rounded-xl bg-[#174f40] px-6 text-sm font-bold text-white disabled:opacity-50">{busy?"Submitting order…":"Submit order to warehouse →"}</button></div>
     </form>
