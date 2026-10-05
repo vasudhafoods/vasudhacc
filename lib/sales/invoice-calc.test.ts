@@ -40,3 +40,19 @@ test("separate GST slabs are taxed separately", () => {
   assert.deepEqual(result.slabs.map(slab => [slab.gstRateBps, slab.taxablePaisa, slab.cgstPaisa]), [[500, 10000, 250], [1200, 10000, 600]]);
   assert.equal(result.totalAmountPaisa, 21700);
 });
+
+test("inter-state invoices charge IGST like the accounts invoice", () => {
+  const result = calculateInvoice([line(7, 12000, 30), line(6, 12000, 30), line(6, 12000, 30), line(6, 12000, 30), line(14, 7000, 30), line(13, 7000, 30), line(13, 7000, 30), line(500, 1200, 38.75)], 0, { interState: true });
+  assert.equal(result.taxablePaisa, 736680);
+  assert.equal(result.igstPaisa, 36834);
+  assert.equal(result.cgstPaisa + result.sgstPaisa, 0);
+  assert.equal(result.roundOffPaisa, -14);
+  assert.equal(result.totalAmountPaisa, 773500);
+});
+
+test("matches the 40% off intra-state invoice including round off", () => {
+  const result = calculateInvoice([line(25, 12000, 40), line(25, 12000, 40), line(25, 12000, 40), line(25, 12000, 40)]);
+  assert.equal(result.lines[0].ratePaisa, 6857);
+  assert.equal(result.taxablePaisa, 685700);
+  assert.equal(result.totalAmountPaisa, 720000);
+});

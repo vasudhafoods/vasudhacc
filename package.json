@@ -12,7 +12,6 @@
     "db:verify": "tsx db/verify.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
     "@next/env": "^16.2.12",
     "drizzle-orm": "^0.45.2",
     "next": "16.2.12",
@@ -20,7 +19,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.10.1",
-    "zod": "^4.6.5"
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

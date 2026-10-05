@@ -181,6 +181,8 @@ export async function createOfflineSale(input: {
   isNewB2bCustomer: boolean;
   initialCollectionPaisa: number;
   additionalDiscountPaisa?: number;
+  /** Buyer outside Telangana: bill IGST instead of CGST + SGST. */
+  interState?: boolean;
   paymentMode?: string;
   paymentTransactionId?: string;
   paymentReceiverName?: string;
@@ -237,8 +239,8 @@ export async function createOfflineSale(input: {
   const taxableBeforeInvoiceDiscount = subtotalAmountPaisa - productDiscountPaisa;
   const invoiceDiscountPaisa = input.additionalDiscountPaisa ?? 0;
   if (!Number.isSafeInteger(invoiceDiscountPaisa) || invoiceDiscountPaisa < 0 || invoiceDiscountPaisa > taxableBeforeInvoiceDiscount) throw new OfflineSalesError("INVALID_SALE", "Extra invoice discount cannot exceed the remaining invoice value.");
-  // Bill the same way the accounts team's invoice does (rate excl. GST, CGST/SGST per slab, round off).
-  const invoice = calculateInvoice(baseLines, invoiceDiscountPaisa);
+  // Bill the same way the accounts team's invoice does (rate excl. GST, CGST/SGST or IGST per slab, round off).
+  const invoice = calculateInvoice(baseLines, invoiceDiscountPaisa, { interState: input.interState === true });
   const lines = baseLines.map((line, index) => {
     const calculated = invoice.lines[index];
     return { productId: line.productId, productName: line.productName, sku: line.sku, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa, gstRateBps: line.gstRateBps, discountPaisa: calculated.discountPaisa, rateInclusivePaisa: calculated.rateInclusivePaisa, ratePaisa: calculated.ratePaisa, taxablePaisa: calculated.taxablePaisa, taxPaisa: calculated.taxPaisa, lineTotalPaisa: calculated.lineTotalPaisa };

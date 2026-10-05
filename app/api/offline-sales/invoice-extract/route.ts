@@ -6,7 +6,6 @@ import { extractInvoice, InvoiceExtractError } from "@/services/invoice-extract"
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
 
 const SALES_ACCESS = ["admin", "management", "retail_sales"] as const;
 

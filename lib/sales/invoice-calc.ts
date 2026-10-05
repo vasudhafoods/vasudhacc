@@ -1,6 +1,7 @@
 // Accounts-style (Tally) invoice maths. Unit prices are GST-inclusive list prices:
 // discounted inclusive rate -> rate excl. GST (2 dp) -> amount = qty x rate,
-// CGST/SGST per GST slab on the summed taxable value, then round off to the rupee.
+// CGST/SGST (or IGST for inter-state supply) per GST slab on the summed taxable value,
+// then round off to the rupee.
 export type InvoiceLineInput = { quantity: number; unitPricePaisa: number; gstRateBps: number; discountPaisa: number };
 
 export type InvoiceLineResult = {
@@ -13,7 +14,7 @@ export type InvoiceLineResult = {
   lineTotalPaisa: number;
 };
 
-export type InvoiceTaxSlab = { gstRateBps: number; taxablePaisa: number; cgstPaisa: number; sgstPaisa: number };
+export type InvoiceTaxSlab = { gstRateBps: number; taxablePaisa: number; cgstPaisa: number; sgstPaisa: number; igstPaisa: number };
 
 export type InvoiceTotals = {
   lines: InvoiceLineResult[];
@@ -25,6 +26,7 @@ export type InvoiceTotals = {
   taxablePaisa: number;
   cgstPaisa: number;
   sgstPaisa: number;
+  igstPaisa: number;
   taxPaisa: number;
   roundOffPaisa: number;
   totalAmountPaisa: number;
@@ -47,7 +49,7 @@ function allocate(amount: number, weights: number[]) {
 }
 
 /** Inputs must already be validated as safe non-negative integers with discount <= line value. */
-export function calculateInvoice(lines: InvoiceLineInput[], additionalDiscountPaisa = 0): InvoiceTotals {
+export function calculateInvoice(lines: InvoiceLineInput[], additionalDiscountPaisa = 0, options: { interState?: boolean } = {}): InvoiceTotals {
   const gross = lines.map(line => line.quantity * line.unitPricePaisa);
   const afterProductDiscount = lines.map((line, index) => Math.max(0, gross[index] - line.discountPaisa));
   const productDiscountPaisa = lines.reduce((sum, line, index) => sum + gross[index] - afterProductDiscount[index], 0);
@@ -66,19 +68,22 @@ export function calculateInvoice(lines: InvoiceLineInput[], additionalDiscountPa
   });
 
   const slabs = [...slabMap].sort(([left], [right]) => left - right).map(([gstRateBps, taxablePaisa]) => {
+    if (options.interState) return { gstRateBps, taxablePaisa, cgstPaisa: 0, sgstPaisa: 0, igstPaisa: Math.round(taxablePaisa * gstRateBps / 10_000) };
     const half = Math.round(taxablePaisa * gstRateBps / 20_000);
-    return { gstRateBps, taxablePaisa, cgstPaisa: half, sgstPaisa: half };
+    return { gstRateBps, taxablePaisa, cgstPaisa: half, sgstPaisa: half, igstPaisa: 0 };
   });
   const taxablePaisa = slabs.reduce((sum, slab) => sum + slab.taxablePaisa, 0);
   const cgstPaisa = slabs.reduce((sum, slab) => sum + slab.cgstPaisa, 0);
   const sgstPaisa = slabs.reduce((sum, slab) => sum + slab.sgstPaisa, 0);
-  const beforeRoundOff = taxablePaisa + cgstPaisa + sgstPaisa;
+  const igstPaisa = slabs.reduce((sum, slab) => sum + slab.igstPaisa, 0);
+  const taxPaisa = cgstPaisa + sgstPaisa + igstPaisa;
+  const beforeRoundOff = taxablePaisa + taxPaisa;
   const totalAmountPaisa = Math.round(beforeRoundOff / 100) * 100;
   const subtotalAmountPaisa = gross.reduce((sum, value) => sum + value, 0);
   return {
     lines: calculated, slabs, subtotalAmountPaisa, productDiscountPaisa, invoiceDiscountPaisa,
     discountPaisa: productDiscountPaisa + invoiceDiscountPaisa,
-    taxablePaisa, cgstPaisa, sgstPaisa, taxPaisa: cgstPaisa + sgstPaisa,
+    taxablePaisa, cgstPaisa, sgstPaisa, igstPaisa, taxPaisa,
     roundOffPaisa: totalAmountPaisa - beforeRoundOff, totalAmountPaisa,
   };
 }
