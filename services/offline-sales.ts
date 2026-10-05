@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { randomUUID as uuid } from "node:crypto";
-import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, warehouseLocations } from "@/db/schema";
+import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
 import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
 import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
 import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
@@ -84,20 +84,22 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
 
 export async function getOfflineSalesEntryData(): Promise<OfflineSalesEntryData> {
   const db = getDatabase();
-  const [productsRows, locations, retailRows, livePrices, customers] = await Promise.all([
+  const [productsRows, locations, retailRows, livePrices, customers, mappings] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, category: products.category, unitPricePaisa: products.unitPricePaisa }).from(products).where(eq(products.active, true)).orderBy(products.name),
     db.select({ id: warehouseLocations.id, code: warehouseLocations.code, name: warehouseLocations.name }).from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
     db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved }).from(inventoryBalances).where(eq(inventoryBalances.bucket, "retail")),
     fetchShopifyPricesBySku().catch(() => new Map<string, number>()),
     db.select({ id: salesCustomers.id, name: salesCustomers.name, companyName: salesCustomers.companyName, address: salesCustomers.address, phone: salesCustomers.phone, gstNumber: salesCustomers.gstNumber }).from(salesCustomers).where(eq(salesCustomers.active, true)).orderBy(salesCustomers.name),
+    db.select({ productId: shopifyMappings.productId }).from(shopifyMappings),
   ]);
+  const importedProducts = new Set(mappings.map(mapping => mapping.productId));
   return {
     products: productsRows.flatMap((product) => {
-      if (/\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(product.name)) return [];
+      if (importedProducts.has(product.id) && /\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(product.name)) return [];
       const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
-      if (packMatch && Number(packMatch[1]) !== 1) return [];
+      if (importedProducts.has(product.id) && packMatch && Number(packMatch[1]) !== 1) return [];
       const displayName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+1\b.*$/i, "").trim() || product.name;
-      return [{ ...product, name: displayName, unitPricePaisa: listedOfflineUnitPricePaisa(displayName) ?? livePrices.get(product.sku.trim().toUpperCase()) ?? product.unitPricePaisa }];
+      return [{ ...product, name: displayName, unitPricePaisa: product.unitPricePaisa > 0 ? product.unitPricePaisa : listedOfflineUnitPricePaisa(displayName) ?? livePrices.get(product.sku.trim().toUpperCase()) ?? product.unitPricePaisa }];
     }),
     locations,
     retailBalances: retailRows.map((row) => ({ productId: row.productId, warehouseLocationId: row.warehouseLocationId, available: Math.max(0, row.onHand - row.reserved) })),

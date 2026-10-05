@@ -270,8 +270,8 @@ export async function createWarehouseProduct(input: {
         action: "product.created",
         entityType: "product",
         entityId: product.id,
-        newValue: { sku, name, packSize, barcode, active: true },
-        reason: "New product entered by warehouse staff",
+        newValue: { sku, name, packSize, barcode, category, unitPricePaisa, active: true },
+        reason: "New product entered by staff",
       });
       return { ...product, shopifyMappingId: null };
     });

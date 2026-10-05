@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { SalesProductForm } from "./sales-product-form";
 import type { OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 type Line = { productId: string; quantity: string; unitPrice: string; gstRate: string; discount: string };
@@ -188,6 +189,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
       <button type="button" role="tab" aria-selected={activeTab === "orders"} onClick={()=>setActiveTab("orders")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold ${activeTab === "orders" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>Orders <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">{overview.submittedOrders?.length ?? 0}</span></button>
     </div>
     {activeTab === "create" ? <>
+    <SalesProductForm/>
     <form onSubmit={submit} className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <section><h2 className="text-lg font-bold text-slate-900">Invoice and customer</h2><div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-64 flex-1 text-sm font-semibold">Use saved customer<select className={input} value={selectedCustomerId} onChange={e=>selectCustomer(e.target.value)}><option value="">New / enter customer details</option>{customers.map(item=><option key={item.id} value={item.id}>{item.companyName ? `${item.companyName} · ${item.name}` : item.name} · {item.phone}</option>)}</select></label><button type="button" onClick={()=>{setCustomerError("");setShowCustomerForm(true);}} className="h-11 rounded-lg border border-blue-300 bg-white px-4 text-sm font-bold text-blue-800">+ Create customer</button></div><div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <label className="text-sm font-semibold">Order date<input className={input} type="date" value={date} onChange={e=>setDate(e.target.value)} required/></label>
