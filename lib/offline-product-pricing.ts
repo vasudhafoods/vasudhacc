@@ -5,7 +5,7 @@ const listedPrices: { names: string[]; rupees: number }[] = [
   { names: ["upma", "poha"], rupees: 99 },
   { names: ["puliyogare rice"], rupees: 150 },
   { names: ["gajar halwa", "moong dal halwa", "dudhi halwa"], rupees: 100 },
-  { names: ["millet chikki", "peanut chikki", "20g peanut chikki"], rupees: 10 },
+  { names: ["millet chikki", "peanut chikki", "20g peanut chikki"], rupees: 12 },
 ];
 
 export function listedOfflineUnitPricePaisa(productName: string): number | null {
