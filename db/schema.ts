@@ -237,7 +237,7 @@ export const offlineSales = pgTable("offline_sales", {
   trackingUrl: text("tracking_url"),
   warehouseLocationId: uuid("warehouse_location_id").references(() => warehouseLocations.id, { onDelete: "restrict" }),
   expectedNextPaymentDate: text("expected_next_payment_date"),
-  lines: jsonb("lines").$type<{ productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[]>().default([]).notNull(),
+  lines: jsonb("lines").$type<{ productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; rateInclusivePaisa?: number; ratePaisa?: number; taxablePaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[]>().default([]).notNull(),
   createdBy: text("created_by").notNull(),
   ...auditColumns,
 }, (table) => [

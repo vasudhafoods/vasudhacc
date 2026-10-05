@@ -35,7 +35,10 @@ export interface OfflineSaleRow {
   trackingUrl?: string | null;
   warehouseLocationId: string | null;
   expectedNextPaymentDate: string | null;
-  lines: { productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[];
+  lines: { productId?: string; sku?: string; productName: string; quantity: number; unitPricePaisa: number; gstRateBps?: number; discountPaisa?: number; rateInclusivePaisa?: number; ratePaisa?: number; taxablePaisa?: number; taxPaisa?: number; lineTotalPaisa?: number }[];
+  correctionCount?: number;
+  lastCorrectedAt?: string | null;
+  cancellationNote?: string | null;
   createdBy: string;
 }
 

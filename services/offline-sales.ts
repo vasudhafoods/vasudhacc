@@ -6,6 +6,7 @@ import { randomUUID as uuid } from "node:crypto";
 import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
 import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
 import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
+import { calculateInvoice } from "@/lib/sales/invoice-calc";
 import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 const MAX_AMOUNT_PAISA = 1_000_000_000;
@@ -62,7 +63,7 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
     discountPaisa: sale.discountPaisa,
     taxPaisa: sale.taxPaisa,
     collectedAmountPaisa: collected,
-    pendingAmountPaisa: sale.totalAmountPaisa - collected,
+    pendingAmountPaisa: sale.deliveryStatus === "cancelled" ? 0 : sale.totalAmountPaisa - collected,
     paymentStatus: paymentStatus(sale.totalAmountPaisa, collected),
     reference: sale.reference,
     notes: sale.notes,
@@ -137,24 +138,29 @@ export async function getOfflineSalesOverview(range: { from: string; to: string 
   const to = rangeBoundary(range.to, "end");
   if (from > to) throw new OfflineSalesError("INVALID_SALE", "The reporting start date must be before the end date.");
   const db = getDatabase();
-  const [allSales, allCollections, periodSales, periodCollections] = await Promise.all([
+  const [allSales, allCollections, periodSales, periodCollections, amendments] = await Promise.all([
     db.select().from(offlineSales).orderBy(desc(offlineSales.saleDate)),
     db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
     db.select().from(offlineSales).where(and(gte(offlineSales.saleDate, from), lte(offlineSales.saleDate, to))).orderBy(desc(offlineSales.saleDate)),
     db.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(and(gte(offlineSaleCollections.collectedAt, from), lte(offlineSaleCollections.collectedAt, to))),
+    db.select({ entityId: auditEvents.entityId, action: auditEvents.action, reason: auditEvents.reason, createdAt: auditEvents.createdAt }).from(auditEvents).where(and(eq(auditEvents.entityType, "offline_sale"), inArray(auditEvents.action, ["offline_sale.corrected", "offline_sale.cancelled"]))).orderBy(auditEvents.createdAt),
   ]);
   const collectionsBySale = mapCollections(allCollections);
-  const allRows = allSales.map((sale) => toRow(sale, collectionsBySale.get(sale.id) ?? 0));
+  const allRows = allSales.map((sale) => {
+    const history = amendments.filter(event => event.entityId === sale.id);
+    const corrections = history.filter(event => event.action === "offline_sale.corrected");
+    return { ...toRow(sale, collectionsBySale.get(sale.id) ?? 0), correctionCount: corrections.length, lastCorrectedAt: corrections.at(-1)?.createdAt.toISOString() ?? null, cancellationNote: history.find(event => event.action === "offline_sale.cancelled")?.reason ?? null };
+  });
   const periodRows = periodSales.map((sale) => toRow(sale, collectionsBySale.get(sale.id) ?? 0));
-  const salesAmountPaisa = periodRows.reduce((sum, sale) => sum + sale.totalAmountPaisa, 0);
+  const salesAmountPaisa = periodRows.filter(sale => sale.deliveryStatus !== "cancelled").reduce((sum, sale) => sum + sale.totalAmountPaisa, 0);
   const collectedAmountPaisa = periodCollections.reduce((sum, collection) => sum + collection.amountPaisa, 0);
   const outstandingSales = allRows.filter((sale) => sale.pendingAmountPaisa > 0).sort((left, right) => right.pendingAmountPaisa - left.pendingAmountPaisa || right.saleDate.localeCompare(left.saleDate));
   return {
     salesAmountPaisa,
     collectedAmountPaisa,
     openReceivablesPaisa: outstandingSales.reduce((sum, sale) => sum + sale.pendingAmountPaisa, 0),
-    newB2bCustomers: periodRows.filter((sale) => sale.customerType === "b2b" && sale.isNewB2bCustomer).length,
-    salesCount: periodRows.length,
+    newB2bCustomers: periodRows.filter((sale) => sale.deliveryStatus !== "cancelled" && sale.customerType === "b2b" && sale.isNewB2bCustomer).length,
+    salesCount: periodRows.filter(sale => sale.deliveryStatus !== "cancelled").length,
     recentSales: periodRows.slice(0, 20),
     outstandingSales: outstandingSales.slice(0, 12),
     ...(options?.createdBy ? { submittedOrders: allRows.filter((sale) => sale.createdBy === options.createdBy) } : {}),
@@ -226,31 +232,19 @@ export async function createOfflineSale(input: {
     uniqueProducts.add(line.productId);
     subtotalAmountPaisa += lineSubtotal;
     productDiscountPaisa += line.discountPaisa;
-    return { ...line, lineSubtotal, taxableBeforeInvoiceDiscount: lineSubtotal - line.discountPaisa };
+    return line;
   });
   const taxableBeforeInvoiceDiscount = subtotalAmountPaisa - productDiscountPaisa;
   const invoiceDiscountPaisa = input.additionalDiscountPaisa ?? 0;
   if (!Number.isSafeInteger(invoiceDiscountPaisa) || invoiceDiscountPaisa < 0 || invoiceDiscountPaisa > taxableBeforeInvoiceDiscount) throw new OfflineSalesError("INVALID_SALE", "Extra invoice discount cannot exceed the remaining invoice value.");
-  const allocations = baseLines.map((line) => taxableBeforeInvoiceDiscount ? Math.floor(invoiceDiscountPaisa * line.taxableBeforeInvoiceDiscount / taxableBeforeInvoiceDiscount) : 0);
-  let unallocatedDiscount = invoiceDiscountPaisa - allocations.reduce((sum, amount) => sum + amount, 0);
-  const allocationOrder = baseLines.map((line, index) => ({ index, remainder: taxableBeforeInvoiceDiscount ? (invoiceDiscountPaisa * line.taxableBeforeInvoiceDiscount) % taxableBeforeInvoiceDiscount : 0 })).sort((left, right) => right.remainder - left.remainder);
-  for (const item of allocationOrder) {
-    if (unallocatedDiscount <= 0) break;
-    if (allocations[item.index] < baseLines[item.index].taxableBeforeInvoiceDiscount) { allocations[item.index] += 1; unallocatedDiscount -= 1; }
-  }
-  let taxPaisa = 0;
+  // Bill the same way the accounts team's invoice does (rate excl. GST, CGST/SGST per slab, round off).
+  const invoice = calculateInvoice(baseLines, invoiceDiscountPaisa);
   const lines = baseLines.map((line, index) => {
-    const allocatedDiscount = allocations[index];
-    const totalLineDiscount = line.discountPaisa + allocatedDiscount;
-    // Sales unit prices are GST-inclusive; report the tax component without adding tax on top.
-    const inclusiveLineAmount = line.lineSubtotal - totalLineDiscount;
-    const lineTaxPaisa = Math.round(inclusiveLineAmount * line.gstRateBps / (10_000 + line.gstRateBps));
-    const lineTotalPaisa = inclusiveLineAmount;
-    taxPaisa += lineTaxPaisa;
-    return { productId: line.productId, productName: line.productName, sku: line.sku, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa, gstRateBps: line.gstRateBps, discountPaisa: totalLineDiscount, taxPaisa: lineTaxPaisa, lineTotalPaisa };
+    const calculated = invoice.lines[index];
+    return { productId: line.productId, productName: line.productName, sku: line.sku, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa, gstRateBps: line.gstRateBps, discountPaisa: calculated.discountPaisa, rateInclusivePaisa: calculated.rateInclusivePaisa, ratePaisa: calculated.ratePaisa, taxablePaisa: calculated.taxablePaisa, taxPaisa: calculated.taxPaisa, lineTotalPaisa: calculated.lineTotalPaisa };
   });
-  const discountPaisa = productDiscountPaisa + invoiceDiscountPaisa;
-  const totalAmountPaisa = validPaisa(subtotalAmountPaisa - discountPaisa, "INVALID_SALE", "Invoice total");
+  const { discountPaisa, taxPaisa } = invoice;
+  const totalAmountPaisa = validPaisa(invoice.totalAmountPaisa, "INVALID_SALE", "Invoice total");
   if (!Number.isSafeInteger(input.initialCollectionPaisa) || input.initialCollectionPaisa < 0 || input.initialCollectionPaisa > totalAmountPaisa) throw new OfflineSalesError("INVALID_SALE", "Collected amount must be between zero and the invoice total.");
   if (input.initialCollectionPaisa > 0) {
     if (!input.paymentMode || !input.paymentReceiverName?.trim() || !input.paymentProofFileName) throw new OfflineSalesError("INVALID_SALE", "Payment mode, receiver name, and payment proof are required when payment is recorded.");
@@ -364,11 +358,12 @@ export async function recordOfflineSaleCollection(input: {
   const db = getDatabase();
   return db.transaction(async (tx) => {
     const [duplicate] = await tx.select().from(offlineSaleCollections).where(eq(offlineSaleCollections.idempotencyKey, input.idempotencyKey)).limit(1);
-    const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).limit(1);
+    const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).for("update").limit(1);
     if (!sale) throw new OfflineSalesError("NOT_FOUND", "This offline sale could not be found.");
     const collections = await tx.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(eq(offlineSaleCollections.offlineSaleId, sale.id));
     const collectedBefore = collections.reduce((sum, collection) => sum + collection.amountPaisa, 0);
     if (duplicate) return { sale: toRow(sale, collectedBefore), duplicate: true };
+    if (sale.deliveryStatus === "cancelled") throw new OfflineSalesError("INVALID_COLLECTION", "Payments cannot be added to a cancelled order.");
     const pending = sale.totalAmountPaisa - collectedBefore;
     if (amountPaisa > pending) throw new OfflineSalesError("INVALID_COLLECTION", `Only ₹${(pending / 100).toFixed(2)} remains on this sale.`);
     if (amountPaisa < pending && !input.expectedNextPaymentDate) throw new OfflineSalesError("INVALID_COLLECTION", "Set the expected date for the next partial payment.");

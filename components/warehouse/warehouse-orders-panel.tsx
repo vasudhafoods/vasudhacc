@@ -8,7 +8,7 @@ import type { ShopifyWarehouseOrder } from "@/types/warehouse";
 type Status = "packing" | "shipped" | "out_for_delivery" | "delivered";
 type OrderDocument = { fileName: string; url: string };
 type OrderDocumentKind = "tracking_slip" | "proof_of_delivery";
-type OrderDocumentView = OrderDocument & { kind: string; contentType: string; createdAt: string };
+type OrderDocumentView = OrderDocument & { kind: string; contentType: string; createdAt: string; isCurrentInvoice?: boolean };
 type ShopifyOrderFilter = "all" | "unfulfilled" | "partially_fulfilled" | "fulfilled";
 type OrderTab = "shopify" | "retail";
 
@@ -215,7 +215,7 @@ export function WarehouseOrdersPanel({ salesOrders, shopifyOrders, shopifyOrders
           </div>
           <button type="button" onClick={() => void toggleOrderDocuments(order)} className="mt-3 text-xs font-semibold text-blue-700 underline">{expandedDocuments[order.id] ? "Hide order documents" : "View order documents"}</button>
           {expandedDocuments[order.id] ? <div className="mt-2 rounded-lg border border-slate-200 bg-white p-3 text-sm">
-            {loadingDocuments[order.id] ? <p className="text-slate-500">Loading documents…</p> : documentErrors[order.id] ? <p role="alert" className="text-rose-700">{documentErrors[order.id]}</p> : orderDocumentLists[order.id]?.length ? <ul className="space-y-2">{orderDocumentLists[order.id].map((document) => <li key={document.url} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2"><div><p className="font-semibold text-slate-800">{document.fileName}</p><p className="text-xs capitalize text-slate-500">{document.kind.replaceAll("_", " ")} · {new Date(document.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" })}</p></div><a className="font-semibold text-blue-700 underline" href={document.url} target="_blank" rel="noreferrer">Open document</a></li>)}</ul> : <p className="text-slate-500">No documents have been uploaded for this order yet.</p>}
+            {loadingDocuments[order.id] ? <p className="text-slate-500">Loading documents…</p> : documentErrors[order.id] ? <p role="alert" className="text-rose-700">{documentErrors[order.id]}</p> : orderDocumentLists[order.id]?.length ? <ul className="space-y-2">{orderDocumentLists[order.id].map((document) => <li key={document.url} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-50 px-3 py-2"><div><p className="font-semibold text-slate-800">{document.fileName}</p><p className="text-xs capitalize text-slate-500">{document.kind === "invoice" ? document.isCurrentInvoice ? "Current invoice" : "Previous invoice" : document.kind.replaceAll("_", " ")} · {new Date(document.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" })}</p></div><a className="font-semibold text-blue-700 underline" href={document.url} target="_blank" rel="noreferrer">Open document</a></li>)}</ul> : <p className="text-slate-500">No documents have been uploaded for this order yet.</p>}
           </div> : null}
         </article>;
       }) : <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">Sales has not submitted any retail orders yet.</p>}

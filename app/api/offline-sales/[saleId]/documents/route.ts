@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { offlineSaleDocuments, offlineSales } from "@/db/schema";
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
@@ -17,8 +17,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ sal
   if (!sessionHasRole(session, DOCUMENT_ACCESS)) return Response.json({ error: { message: "This account cannot view sales documents." } }, { status: 403 });
   const { saleId } = await params;
   const db = getDatabase();
-  const rows = await db.select({ id: offlineSaleDocuments.id, kind: offlineSaleDocuments.kind, fileName: offlineSaleDocuments.fileName, contentType: offlineSaleDocuments.contentType, createdAt: offlineSaleDocuments.createdAt }).from(offlineSaleDocuments).where(eq(offlineSaleDocuments.offlineSaleId, saleId));
-  return Response.json({ files: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), url: `/api/offline-sales/${saleId}/documents/${row.id}` })) }, { headers: { "Cache-Control": "private, no-store" } });
+  const rows = await db.select({ id: offlineSaleDocuments.id, kind: offlineSaleDocuments.kind, fileName: offlineSaleDocuments.fileName, contentType: offlineSaleDocuments.contentType, createdAt: offlineSaleDocuments.createdAt }).from(offlineSaleDocuments).where(eq(offlineSaleDocuments.offlineSaleId, saleId)).orderBy(desc(offlineSaleDocuments.createdAt));
+  const latestInvoiceId = rows.find(row => row.kind === "invoice")?.id;
+  return Response.json({ files: rows.map((row) => ({ ...row, isCurrentInvoice: row.id === latestInvoiceId, createdAt: row.createdAt.toISOString(), url: `/api/offline-sales/${saleId}/documents/${row.id}` })) }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ saleId: string }> }) {
