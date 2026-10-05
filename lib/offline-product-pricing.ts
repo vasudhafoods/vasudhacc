@@ -1,11 +1,11 @@
 const listedPrices: { names: string[]; rupees: number }[] = [
   { names: ["navagraian cookies", "navagraha cookies", "little millet cookies", "wheat fiber cookies", "foxtail millet cookies"], rupees: 70 },
   { names: ["little moringa millet", "pearl millet noodles", "foxtail millet noodles", "kodo millet noodles", "sorghum millet noodles", "finger millet noodles"], rupees: 120 },
-  { names: ["idli sambar", "poha", "aloo jeera", "dal khichadi", "lemon rice"], rupees: 125 },
-  { names: ["upma"], rupees: 99 },
+  { names: ["idli sambar", "aloo jeera", "dal khichadi", "lemon rice"], rupees: 125 },
+  { names: ["upma", "poha"], rupees: 99 },
   { names: ["puliyogare rice"], rupees: 150 },
   { names: ["gajar halwa", "moong dal halwa", "dudhi halwa"], rupees: 100 },
-  { names: ["millet chikki", "peanut chikki"], rupees: 10 },
+  { names: ["millet chikki", "peanut chikki", "20g peanut chikki"], rupees: 10 },
 ];
 
 export function listedOfflineUnitPricePaisa(productName: string): number | null {
