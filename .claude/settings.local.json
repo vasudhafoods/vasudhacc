@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "allow": ["Bash(node --env-file=.env.local:*)"]
+  }
+}
+
