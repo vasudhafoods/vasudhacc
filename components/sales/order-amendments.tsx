@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { discountPercent, discountFromPercent } from "@/lib/sales/discount-percent";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
 import type { OfflineSaleRow, OfflineSalesEntryData } from "@/types/offline-sales";
 
@@ -33,7 +34,7 @@ export function OrderAmendments({ sale, products }: { sale: OfflineSaleRow; prod
       if (!response.ok) throw new Error(body.error?.message ?? "Could not load order.");
       const loaded = body as Details;
       setDetails(loaded);
-      setLines(loaded.sale.lines.map(line => ({ productId: line.productId ?? "", quantity: String(line.quantity), price: (line.unitPricePaisa / 100).toFixed(2), gst: String((line.gstRateBps ?? 0) / 100), discount: ((line.discountPaisa ?? 0) / 100).toFixed(2) })));
+      setLines(loaded.sale.lines.map(line => ({ productId: line.productId ?? "", quantity: String(line.quantity), price: (line.unitPricePaisa / 100).toFixed(2), gst: String((line.gstRateBps ?? 0) / 100), discount: discountPercent(line.quantity * line.unitPricePaisa, line.discountPaisa ?? 0) })));
       setMode(next);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load order."); }
     finally { setBusy(false); }
@@ -50,7 +51,7 @@ export function OrderAmendments({ sale, products }: { sale: OfflineSaleRow; prod
         return Math.round(Number(value) * 100);
       };
       const fields = Object.fromEntries(data.entries());
-      const payload = { ...fields, action: mode, expectedVersion: details.sale.updatedAt, shippingSameAsBilling: data.get("shippingSameAsBilling") === "on", ...(mode === "edit" ? { lines: lines.map(line => ({ productId: line.productId, quantity: Number(line.quantity), unitPricePaisa: toPaisa(line.price), gstRateBps: Math.round(Number(line.gst) * 100), discountPaisa: toPaisa(line.discount) })) } : {}) };
+      const payload = { ...fields, action: mode, expectedVersion: details.sale.updatedAt, shippingSameAsBilling: data.get("shippingSameAsBilling") === "on", ...(mode === "edit" ? { lines: lines.map(line => ({ productId: line.productId, quantity: Number(line.quantity), unitPricePaisa: toPaisa(line.price), gstRateBps: Math.round(Number(line.gst) * 100), discountPaisa: discountFromPercent(Number(line.quantity) * toPaisa(line.price), line.discount) })) } : {}) };
       const form = new FormData(); form.set("data", JSON.stringify(payload));
       const invoice = data.get("invoice"); if (invoice instanceof File && invoice.size) form.set("invoice", invoice);
       const response = await fetch(endpoint, { method: "POST", body: form });
@@ -84,7 +85,7 @@ export function OrderAmendments({ sale, products }: { sale: OfflineSaleRow; prod
         {details.history.map((event, index) => <div key={event.id} className="mb-3 rounded-lg border bg-white p-3"><p className="text-sm font-semibold">{event.action === "offline_sale.cancelled" ? "Cancelled" : `Correction ${details.history.slice(0, index + 1).filter(row => row.action === "offline_sale.corrected").length}`} · {time(event.editedAt)} IST · {event.actor}</p><p className="mt-1 text-sm">{event.reason}</p><details className="mt-2"><summary className="cursor-pointer text-xs text-blue-800 underline">Explore order before edit</summary><OrderSnapshot sale={event.before}/></details><details className="mt-2"><summary className="cursor-pointer text-xs text-blue-800 underline">View saved version after change</summary><OrderSnapshot sale={event.after}/></details></div>)}
       </> : <form onSubmit={save} className="space-y-4"><fieldset disabled={busy} className="space-y-4">
         {mode === "cancel" ? <><p className="text-sm">Cancel this order and release its reserved stock. The order will remain in the database.</p>{sale.collectedAmountPaisa > 0 ? <p className="text-sm text-amber-800">Payments of {money(sale.collectedAmountPaisa)} are retained; cancellation does not issue a refund.</p> : null}</> : <>
-          <p className="text-xs text-slate-600">Edits are allowed before dispatch. Existing payments and the preparing warehouse stay attached to this order. Discount amounts below include any original invoice discount.</p>
+          <p className="text-xs text-slate-600">Edits are allowed before dispatch. Existing payments and the preparing warehouse stay attached to this order. Discount percentages below include any original invoice discount.</p>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">Invoice number<input name="billingInvoiceNumber" defaultValue={current.billingInvoiceNumber ?? ""} className={input} required minLength={2} maxLength={100}/></label>
             <label className="text-sm">Invoice date<input name="saleDate" type="date" defaultValue={date(current.saleDate)} className={input} required/></label>
@@ -102,11 +103,11 @@ export function OrderAmendments({ sale, products }: { sale: OfflineSaleRow; prod
             <label className="text-xs">Quantity<input className={input} type="number" min="1" step="1" required value={line.quantity} onChange={event => update(index, "quantity", event.target.value)}/></label>
             <label className="text-xs">Unit price ₹<input className={input} type="number" min="0.01" step="0.01" required value={line.price} onChange={event => update(index, "price", event.target.value)}/></label>
             <label className="text-xs">GST %<input className={input} type="number" min="0" max="28" step="0.01" required value={line.gst} onChange={event => update(index, "gst", event.target.value)}/></label>
-            <label className="text-xs">Discount ₹<input className={input} type="number" min="0" step="0.01" required value={line.discount} onChange={event => update(index, "discount", event.target.value)}/></label>
+            <label className="text-xs">Discount %<input className={input} type="number" min="0" max="100" step="any" required value={line.discount} onChange={event => update(index, "discount", event.target.value)}/></label>
             <button type="button" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, i) => i !== index))} className="text-xs text-rose-700 underline disabled:opacity-40">Remove line</button>
           </div>)}
           <button type="button" disabled={lines.length >= 50} onClick={() => setLines(current => [...current, { productId: "", quantity: "1", price: "", gst: "0", discount: "0" }])} className="text-sm text-blue-800 underline">+ Add product line</button>
-          <p className="text-sm font-bold">Corrected total: {money(calculateInvoice(lines.map(line => ({ quantity: Math.max(0, Math.floor(Number(line.quantity) || 0)), unitPricePaisa: Math.round((Number(line.price) || 0) * 100), gstRateBps: Math.round((Number(line.gst) || 0) * 100), discountPaisa: Math.round((Number(line.discount) || 0) * 100) }))).totalAmountPaisa)}</p>
+          <p className="text-sm font-bold">Corrected total: {money(calculateInvoice(lines.map(line => ({ quantity: Math.max(0, Math.floor(Number(line.quantity) || 0)), unitPricePaisa: Math.round((Number(line.price) || 0) * 100), gstRateBps: Math.round((Number(line.gst) || 0) * 100), discountPaisa: discountFromPercent(Math.max(0, Math.floor(Number(line.quantity) || 0)) * Math.round((Number(line.price) || 0) * 100), String(Math.min(100, Math.max(0, Number(line.discount) || 0)))) }))).totalAmountPaisa)}</p>
           <label className="block text-sm">Order notes<textarea name="notes" defaultValue={current.notes ?? ""} maxLength={1000} className={input}/></label>
           <label className="block text-sm">Replacement invoice (optional)<input name="invoice" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className={input}/><span className="text-xs text-slate-500">Up to 3 MB. Earlier invoice files are retained.</span></label>
           {details.documents.map(doc => <a key={doc.id} className="mr-3 inline-block text-xs text-blue-800 underline" href={`/api/offline-sales/${sale.id}/documents/${doc.id}`} target="_blank" rel="noreferrer">{doc.fileName} · {time(doc.createdAt)}</a>)}
