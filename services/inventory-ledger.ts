@@ -15,6 +15,7 @@ import {
   type InventoryBucket,
 } from "@/db/schema";
 import type { ShopifySyncStatus } from "@/types/warehouse";
+import { addProductToShopify } from "@/services/shopify-products";
 import { receiptAllocation } from "@/lib/inventory/allocation";
 
 export class InventoryCommandError extends Error {
@@ -25,6 +26,8 @@ export class InventoryCommandError extends Error {
 }
 
 export interface ReceiveStockInput {
+  addToShopify?: boolean;
+  invoiceTransactionId?: string;
   productId: string;
   warehouseLocationId: string;
   receivedQuantity: number;
@@ -178,7 +181,7 @@ function validateReceipt(input: ReceiveStockInput, onShopify: boolean) {
   if (!input.expiryDate || !Number.isFinite(input.expiryDate.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "An expiry date is required for every received product.");
   if (!input.receivedAt || !Number.isFinite(input.receivedAt.getTime())) throw new InventoryCommandError("INVALID_RECEIPT", "A valid receiving date is required.");
   if (!input.supplierName?.trim() || !input.referenceId?.trim()) throw new InventoryCommandError("INVALID_RECEIPT", "Supplier name and invoice number are required.");
-  if (!Number.isSafeInteger(input.invoiceValuePaisa) || (input.invoiceValuePaisa ?? 0) <= 0) throw new InventoryCommandError("INVALID_RECEIPT", "A valid invoice value greater than zero is required.");
+  if (!input.invoiceTransactionId && (!Number.isSafeInteger(input.invoiceValuePaisa) || (input.invoiceValuePaisa ?? 0) <= 0)) throw new InventoryCommandError("INVALID_RECEIPT", "A valid invoice value greater than zero is required.");
   if (input.expiryDate < input.receivedAt) throw new InventoryCommandError("INVALID_RECEIPT", "Expiry date cannot be before the receiving date.");
   const usableQuantity = input.receivedQuantity - input.damagedQuantity;
   const { online: expectedOnlineQuantity, retail: expectedRetailQuantity, buffer: expectedBufferQuantity } = receiptAllocation(usableQuantity, onShopify);
@@ -188,7 +191,7 @@ function validateReceipt(input: ReceiveStockInput, onShopify: boolean) {
   if (!input.batchNumber.trim() || !input.source.trim() || !input.reason.trim() || !input.actorUsername.trim() || !input.idempotencyKey.trim()) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Batch, source, reason, actor and idempotency key are required.");
   }
-  if (input.onlineQuantity > 0 && !input.shopifyMappingId) {
+  if (input.onlineQuantity > 0 && !input.shopifyMappingId && !input.addToShopify) {
     throw new InventoryCommandError("MAPPING_REQUIRED", "A verified Shopify mapping is required when received stock is allocated Online.");
   }
 }
@@ -453,12 +456,21 @@ export async function disposeInventory(input: DisposeInventoryInput): Promise<Di
 
 export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise<ReceiveStockResult> {
   const db = getDatabase();
-  // Products without any Shopify listing are retail-only and receive no Shopify allocation.
-  const listing = await db.select({ id: shopifyMappings.id }).from(shopifyMappings).where(eq(shopifyMappings.productId, input.productId)).limit(1);
-  validateReceipt(input, listing.length > 0);
+  validateReceipt(input, input.addToShopify === true);
   const existing = await db.select({ id: inventoryTransactions.id, transactionNumber: inventoryTransactions.transactionNumber })
     .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing[0]) return { transactionId: existing[0].id, transactionNumber: existing[0].transactionNumber, duplicate: true, receivedQuantity: input.receivedQuantity, shopifySync: input.onlineQuantity > 0 ? "pending" : "not_required" };
+
+  if (input.invoiceTransactionId) {
+    const [parent] = await db.select().from(inventoryTransactions).where(eq(inventoryTransactions.id, input.invoiceTransactionId)).limit(1);
+    if (!parent || parent.type !== "stock_received" || parent.actorUsername !== input.actorUsername || parent.referenceId !== input.referenceId || !Number(parent.invoiceValuePaisa) || parent.supplierName !== input.supplierName?.trim() || parent.idempotencyKey.split(":")[0] !== input.idempotencyKey.split(":")[0]) throw new InventoryCommandError("INVALID_RECEIPT", "The first invoice row must be saved before additional rows.");
+  }
+  if (input.addToShopify) {
+    const mappings = await db.select().from(shopifyMappings).where(eq(shopifyMappings.productId, input.productId));
+    if (!mappings.length) input = { ...input, shopifyMappingId: (await addProductToShopify(input.productId, input.actorUsername)).mappingId };
+    else if (mappings.length === 1 && mappings[0].status === "mapped") input = { ...input, shopifyMappingId: mappings[0].id };
+    else if (!input.shopifyMappingId || !mappings.some(mapping => mapping.id === input.shopifyMappingId && mapping.status === "mapped")) throw new InventoryCommandError("MAPPING_REQUIRED", "Choose a verified Shopify mapping before splitting stock online.");
+  } else input = { ...input, shopifyMappingId: undefined };
 
   return db.transaction(async (tx) => {
     let mapping: typeof shopifyMappings.$inferSelect | null = null;
@@ -499,7 +511,7 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
       supplierName: input.supplierName?.trim() || null,
       invoiceValuePaisa: input.invoiceValuePaisa ?? null,
       occurredAt: input.receivedAt,
-      metadata: { source: input.source, batchNumber: input.batchNumber },
+      metadata: { source: input.source, batchNumber: input.batchNumber, addToShopify: input.addToShopify === true, invoiceTransactionId: input.invoiceTransactionId ?? null },
     }).returning({ id: inventoryTransactions.id });
 
     const lines: (typeof inventoryTransactionLines.$inferInsert)[] = [];

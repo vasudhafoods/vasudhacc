@@ -8,7 +8,15 @@ test("Shopify products split 40% Shopify, 40% Retail, 20% Buffer", () => {
 });
 
 test("retail-only products send nothing to Shopify", () => {
-  assert.deepEqual(receiptAllocation(100, false), { online: 0, retail: 80, buffer: 20 });
-  assert.deepEqual(receiptAllocation(7, false), { online: 0, retail: 6, buffer: 1 });
+  assert.deepEqual(receiptAllocation(100, false), { online: 0, retail: 100, buffer: 0 });
+  assert.deepEqual(receiptAllocation(7, false), { online: 0, retail: 7, buffer: 0 });
   assert.deepEqual(receiptAllocation(0, false), { online: 0, retail: 0, buffer: 0 });
+});
+
+test("every whole-packet allocation conserves usable stock", () => {
+  for (let quantity = 0; quantity <= 1000; quantity++) for (const enabled of [true, false]) {
+    const split = receiptAllocation(quantity, enabled);
+    assert.equal(split.online + split.retail + split.buffer, quantity);
+    assert.ok(Object.values(split).every(value => Number.isInteger(value) && value >= 0));
+  }
 });

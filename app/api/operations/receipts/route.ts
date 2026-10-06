@@ -21,6 +21,7 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const result = await receiveAndAllocateStock({
       productId: String(body.productId ?? ""),
+      addToShopify: body.addToShopify === true || Number(body.onlineQuantity ?? 0) > 0,
       warehouseLocationId: String(body.warehouseLocationId ?? ""),
       receivedQuantity: Number(body.receivedQuantity),
       damagedQuantity: Number(body.damagedQuantity ?? 0),
