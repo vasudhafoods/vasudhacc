@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { SalesInventory } from "./sales-inventory";
 import { OrderPayment } from "./order-payment";
 import { OrderAmendments } from "./order-amendments";
 import { SalesProductForm } from "./sales-product-form";
@@ -10,7 +11,7 @@ import { SELLER_STATE_CODE, type ParsedInvoice as ExtractedInvoice } from "@/lib
 import type { OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 type Line = { productId: string; quantity: string; unitPrice: string; gstRate: string; discount: string };
-type SalesWorkspaceTab = "create" | "orders";
+type SalesWorkspaceTab = "create" | "orders" | "inventory";
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const money = (paisa: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(paisa / 100);
 const paisa = (value: string) => /^\d+(?:\.\d{1,2})?$/.test(value.trim()) ? Math.round(Number(value) * 100) : 0;
@@ -230,14 +231,15 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
   }
 
   return <div className="space-y-6">
-    <section className="rounded-2xl bg-[#174f40] p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[.16em] text-emerald-200">Retail sales</p><h1 className="mt-2 text-3xl font-bold">{activeTab === "create" ? "Create a customer order" : "My submitted orders"}</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50">{activeTab === "create" ? "Orders are sent directly to the warehouse queue. Retail stock is reserved when the order is submitted and issued when Warehouse marks it dispatched." : "View orders submitted by your sales login and check warehouse fulfillment and payment status."}</p></section>
+    <section className="rounded-2xl bg-[#174f40] p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[.16em] text-emerald-200">Retail sales</p><h1 className="mt-2 text-3xl font-bold">{activeTab === "create" ? "Create a customer order" : activeTab === "inventory" ? "Live inventory" : "My submitted orders"}</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-emerald-50">{activeTab === "create" ? "Orders are sent directly to the warehouse queue. Retail stock is reserved when the order is submitted and issued when Warehouse marks it dispatched." : activeTab === "inventory" ? "View current warehouse stock and Retail availability. This tab is read-only." : "View orders submitted by your sales login and check warehouse fulfillment and payment status."}</p></section>
     {error ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</p> : null}
     {notice ? <div role="status" aria-live="polite" className="fixed right-5 top-24 z-[120] flex max-w-xl items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-semibold text-emerald-950 shadow-xl"><span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-white">✓</span><span>{notice}</span><button type="button" onClick={()=>setNotice("")} className="ml-2 text-lg leading-5 text-emerald-800" aria-label="Dismiss notification">×</button></div> : null}
     <div role="tablist" aria-label="Sales workspace" className="flex gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1.5">
       <button type="button" role="tab" aria-selected={activeTab === "create"} onClick={()=>setActiveTab("create")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold ${activeTab === "create" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>Raise order</button>
       <button type="button" role="tab" aria-selected={activeTab === "orders"} onClick={()=>setActiveTab("orders")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold ${activeTab === "orders" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>Orders <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-800">{overview.submittedOrders?.length ?? 0}</span></button>
+      <button type="button" role="tab" aria-selected={activeTab === "inventory"} onClick={()=>setActiveTab("inventory")} className={`flex-1 rounded-lg px-4 py-3 text-sm font-semibold ${activeTab === "inventory" ? "bg-white text-emerald-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/70"}`}>Inventory</button>
     </div>
-    {activeTab === "create" ? <>
+    {activeTab === "inventory" ? <SalesInventory/> : activeTab === "create" ? <>
     <SalesProductForm/>
     <form onSubmit={submit} className="space-y-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
       <section className="rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50/60 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold text-slate-900">Auto-fill from invoice</h2><p className="mt-1 text-xs text-slate-600">Upload the invoice PDF from the accounts system (up to 3 MB). Invoice number, date, customer, GSTIN and products are filled in from it for you to check.</p></div><button type="button" disabled={readingInvoice} onClick={()=>invoiceInputRef.current?.click()} className="rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-60">{readingInvoice?"Reading invoice…":"Upload invoice"}</button></div>{invoiceReadMessage?<p role="status" className={`mt-3 rounded-lg px-3 py-2 text-sm font-medium ${invoiceReadMessage.tone==="ok"?"bg-emerald-100 text-emerald-900":"bg-amber-100 text-amber-900"}`}>{invoiceReadMessage.text}</p>:null}</section>
