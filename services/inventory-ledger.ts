@@ -15,6 +15,7 @@ import {
   type InventoryBucket,
 } from "@/db/schema";
 import type { ShopifySyncStatus } from "@/types/warehouse";
+import { receiptAllocation } from "@/lib/inventory/allocation";
 
 export class InventoryCommandError extends Error {
   constructor(readonly code: "INVALID_TRANSFER" | "INVALID_RECEIPT" | "INVALID_DISPATCH" | "INVALID_RETURN" | "INVALID_DISPOSAL" | "INSUFFICIENT_STOCK" | "MAPPING_REQUIRED" | "NOT_FOUND", message: string) {
@@ -166,7 +167,7 @@ function validateTransfer(input: TransferInventoryInput) {
   }
 }
 
-function validateReceipt(input: ReceiveStockInput) {
+function validateReceipt(input: ReceiveStockInput, onShopify: boolean) {
   const quantities = [input.receivedQuantity, input.damagedQuantity, input.onlineQuantity, input.retailQuantity, input.bufferQuantity];
   if (quantities.some((quantity) => !Number.isSafeInteger(quantity) || quantity < 0) || input.receivedQuantity <= 0) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Receipt quantities must be non-negative whole numbers and received quantity must be positive.");
@@ -180,9 +181,7 @@ function validateReceipt(input: ReceiveStockInput) {
   if (!Number.isSafeInteger(input.invoiceValuePaisa) || (input.invoiceValuePaisa ?? 0) <= 0) throw new InventoryCommandError("INVALID_RECEIPT", "A valid invoice value greater than zero is required.");
   if (input.expiryDate < input.receivedAt) throw new InventoryCommandError("INVALID_RECEIPT", "Expiry date cannot be before the receiving date.");
   const usableQuantity = input.receivedQuantity - input.damagedQuantity;
-  const expectedOnlineQuantity = Math.round(usableQuantity * 0.4);
-  const expectedRetailQuantity = Math.round(usableQuantity * 0.4);
-  const expectedBufferQuantity = usableQuantity - expectedOnlineQuantity - expectedRetailQuantity;
+  const { online: expectedOnlineQuantity, retail: expectedRetailQuantity, buffer: expectedBufferQuantity } = receiptAllocation(usableQuantity, onShopify);
   if (input.onlineQuantity !== expectedOnlineQuantity || input.retailQuantity !== expectedRetailQuantity || input.bufferQuantity !== expectedBufferQuantity) {
     throw new InventoryCommandError("INVALID_RECEIPT", `Usable stock must be allocated automatically: ${expectedOnlineQuantity} packets to Shopify, ${expectedRetailQuantity} packets to Retail and ${expectedBufferQuantity} packets to Buffer.`);
   }
@@ -453,8 +452,10 @@ export async function disposeInventory(input: DisposeInventoryInput): Promise<Di
 }
 
 export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise<ReceiveStockResult> {
-  validateReceipt(input);
   const db = getDatabase();
+  // Products without any Shopify listing are retail-only and receive no Shopify allocation.
+  const listing = await db.select({ id: shopifyMappings.id }).from(shopifyMappings).where(eq(shopifyMappings.productId, input.productId)).limit(1);
+  validateReceipt(input, listing.length > 0);
   const existing = await db.select({ id: inventoryTransactions.id, transactionNumber: inventoryTransactions.transactionNumber })
     .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing[0]) return { transactionId: existing[0].id, transactionNumber: existing[0].transactionNumber, duplicate: true, receivedQuantity: input.receivedQuantity, shopifySync: input.onlineQuantity > 0 ? "pending" : "not_required" };

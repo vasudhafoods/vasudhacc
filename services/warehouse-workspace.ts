@@ -88,7 +88,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     const shopifyMappingId = mappingByProduct.get(product.id) ?? null;
     const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
     if (shopifyProducts.has(product.id) && packMatch && Number(packMatch[1]) !== 1) return [];
-    return [{ ...product, shopifyMappingId }];
+    return [{ ...product, shopifyMappingId, onShopify: shopifyProducts.has(product.id) }];
   });
 
   const transactionActivities: WarehouseActivity[] = [];
@@ -273,7 +273,7 @@ export async function createWarehouseProduct(input: {
         newValue: { sku, name, packSize, barcode, category, unitPricePaisa, active: true },
         reason: "New product entered by staff",
       });
-      return { ...product, shopifyMappingId: null };
+      return { ...product, shopifyMappingId: null, onShopify: false };
     });
   } catch (error) {
     if (typeof error === "object" && error && "constraint_name" in error) {

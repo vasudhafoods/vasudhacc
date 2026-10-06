@@ -8,6 +8,8 @@ export interface WarehouseProductOption {
   category: "noodles" | "cookies" | "rte" | "other";
   unitPricePaisa: number;
   shopifyMappingId: string | null;
+  /** Listed on Shopify. Products that are not are retail-only. */
+  onShopify: boolean;
 }
 
 export interface WarehouseRetailBalance {

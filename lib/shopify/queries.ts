@@ -194,3 +194,43 @@ export const WEBHOOK_SUBSCRIPTION_CREATE_MUTATION = `#graphql
     }
   }
 `;
+
+export const VARIANT_BY_SKU_QUERY = `#graphql
+  query VariantBySku($query: String!) {
+    productVariants(first: 2, query: $query) {
+      nodes {
+        id
+        sku
+        product { id }
+        inventoryItem { id inventoryLevels(first: 20) { nodes { id location { id name } } } }
+      }
+    }
+  }
+`;
+
+export const PRODUCT_CREATE_MUTATION = `#graphql
+  mutation CommandCenterProductCreate($product: ProductCreateInput!) {
+    productCreate(product: $product) {
+      product { id variants(first: 1) { nodes { id inventoryItem { id } } } }
+      userErrors { field message }
+    }
+  }
+`;
+
+export const PRODUCT_VARIANTS_BULK_UPDATE_MUTATION = `#graphql
+  mutation CommandCenterVariantsUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id }
+      userErrors { field message }
+    }
+  }
+`;
+
+export const INVENTORY_ACTIVATE_MUTATION = `#graphql
+  mutation CommandCenterInventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+    inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+      inventoryLevel { id location { id name } }
+      userErrors { field message }
+    }
+  }
+`;
