@@ -35,7 +35,7 @@ export function SalesProductForm() {
         const listedBody = await listed.json() as { error?: { message?: string } };
         shopifyNote = listed.ok
           ? " It was also added to Shopify. Add images and make it available on the Online Store in Shopify admin to start selling."
-          : ` It was not added to Shopify: ${listedBody.error?.message ?? "Shopify request failed."} Warehouse can add it from Receive stock.`;
+          : ` It was not added to Shopify: ${listedBody.error?.message ?? "Shopify request failed."} Add it in Shopify admin if needed.`;
       }
       setNotice(`${body.product.name} saved to the shared catalog. Warehouse can now receive stock for it.${shopifyNote}`);
       form.reset(); setOpen(false); router.refresh();
