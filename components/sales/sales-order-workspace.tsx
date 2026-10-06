@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { OrderPayment } from "./order-payment";
 import { OrderAmendments } from "./order-amendments";
 import { SalesProductForm } from "./sales-product-form";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
@@ -277,6 +278,7 @@ export function SalesOrderWorkspace({ overview, entryData }: { overview: Offline
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span className="font-bold text-slate-900">Total {money(sale.totalAmountPaisa)}</span><span className="text-slate-600">Paid {money(sale.collectedAmountPaisa)} · Balance {money(sale.pendingAmountPaisa)}</span></div>
         {sale.requestedDispatchDate ? <p className="mt-2 text-xs font-semibold text-amber-700">Requested dispatch by {new Date(`${sale.requestedDispatchDate}T12:00:00+05:30`).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric",timeZone:"Asia/Kolkata"})}</p> : null}
         {sale.deliveredAt ? <p className="mt-1 text-xs font-semibold text-emerald-800">Delivered on {new Date(sale.deliveredAt).toLocaleString("en-IN",{dateStyle:"medium",timeStyle:"short",timeZone:"Asia/Kolkata"})}</p> : null}
+        <OrderPayment sale={sale}/>
         <OrderAmendments sale={sale} products={entryData.products}/>
       </article>)}</div> : <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center"><p className="font-semibold text-slate-800">No submitted orders yet</p><p className="mt-1 text-sm text-slate-500">Orders you raise will appear here.</p><button type="button" onClick={()=>setActiveTab("create")} className="mt-4 rounded-lg bg-[#174f40] px-4 py-2 text-sm font-semibold text-white">Raise an order</button></div>}
     </section>}

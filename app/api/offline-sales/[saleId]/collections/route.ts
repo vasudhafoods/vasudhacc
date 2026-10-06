@@ -17,10 +17,22 @@ export async function POST(request: Request, context: { params: Promise<{ saleId
   if (!session) return Response.json({ error: { code: "UNAUTHORIZED", message: "Authentication is required." } }, { status: 401 });
   if (!sessionHasRole(session, SALES_ACCESS)) return Response.json({ error: { code: "FORBIDDEN", message: "This account cannot record collections." } }, { status: 403 });
   try {
-    const body = await request.json() as Record<string, unknown>;
+    const multipart = request.headers.get("content-type")?.includes("multipart/form-data");
+    let proof: { fileName: string; contentType: string; fileSize: number; contentBase64: string } | undefined;
+    let body: Record<string, unknown>;
+    if (multipart) {
+      const form = await request.formData();
+      body = Object.fromEntries(form.entries());
+      const file = form.get("proof");
+      if (!(file instanceof File) || file.size < 1 || file.size > 3 * 1024 * 1024 || !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new OfflineSalesError("INVALID_COLLECTION", "Upload payment proof as PDF, JPG, PNG, or WebP, up to 3 MB.");
+      proof = { fileName: file.name.replace(/[\\/\r\n\0]/g, "_").slice(0, 240), contentType: file.type, fileSize: file.size, contentBase64: Buffer.from(await file.arrayBuffer()).toString("base64") };
+      body.paymentProofFileName = proof.fileName;
+    } else body = await request.json() as Record<string, unknown>;
     const { saleId } = await context.params;
     const result = await recordOfflineSaleCollection({
       saleId,
+      proof,
+      ownOrdersOnly: session.role === "retail_sales",
       amountPaisa: rupeesToPaisa(body.amount),
       reference: body.reference ? String(body.reference) : undefined,
       notes: body.notes ? String(body.notes) : undefined,

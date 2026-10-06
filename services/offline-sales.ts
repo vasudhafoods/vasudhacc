@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { randomUUID as uuid } from "node:crypto";
-import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
+import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSaleDocuments, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
 import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
 import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
@@ -339,6 +339,8 @@ export async function createOfflineSale(input: {
 
 export async function recordOfflineSaleCollection(input: {
   saleId: string;
+  ownOrdersOnly?: boolean;
+  proof?: { fileName: string; contentType: string; fileSize: number; contentBase64: string };
   amountPaisa: number;
   reference?: string;
   notes?: string;
@@ -359,9 +361,11 @@ export async function recordOfflineSaleCollection(input: {
   if (!input.paymentProofFileName?.trim()) throw new OfflineSalesError("INVALID_COLLECTION", "Upload proof of payment.");
   const db = getDatabase();
   return db.transaction(async (tx) => {
-    const [duplicate] = await tx.select().from(offlineSaleCollections).where(eq(offlineSaleCollections.idempotencyKey, input.idempotencyKey)).limit(1);
     const [sale] = await tx.select().from(offlineSales).where(eq(offlineSales.id, input.saleId)).for("update").limit(1);
     if (!sale) throw new OfflineSalesError("NOT_FOUND", "This offline sale could not be found.");
+    if (input.ownOrdersOnly && sale.createdBy !== input.actorUsername) throw new OfflineSalesError("NOT_FOUND", "This order is not available to your account.");
+    const [duplicate] = await tx.select().from(offlineSaleCollections).where(eq(offlineSaleCollections.idempotencyKey, input.idempotencyKey)).limit(1);
+    if (duplicate && duplicate.offlineSaleId !== sale.id) throw new OfflineSalesError("INVALID_COLLECTION", "Payment submission key belongs to another order.");
     const collections = await tx.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(eq(offlineSaleCollections.offlineSaleId, sale.id));
     const collectedBefore = collections.reduce((sum, collection) => sum + collection.amountPaisa, 0);
     if (duplicate) return { sale: toRow(sale, collectedBefore), duplicate: true };
@@ -370,7 +374,7 @@ export async function recordOfflineSaleCollection(input: {
     if (amountPaisa > pending) throw new OfflineSalesError("INVALID_COLLECTION", `Only ₹${(pending / 100).toFixed(2)} remains on this sale.`);
     if (amountPaisa < pending && !input.expectedNextPaymentDate) throw new OfflineSalesError("INVALID_COLLECTION", "Set the expected date for the next partial payment.");
     if (input.expectedNextPaymentDate) saleDate(input.expectedNextPaymentDate);
-    await tx.insert(offlineSaleCollections).values({
+    const [collection] = await tx.insert(offlineSaleCollections).values({
       offlineSaleId: sale.id,
       idempotencyKey: input.idempotencyKey,
       amountPaisa,
@@ -382,14 +386,19 @@ export async function recordOfflineSaleCollection(input: {
       expectedNextPaymentDate: input.expectedNextPaymentDate ?? null,
       notes,
       recordedBy: input.actorUsername,
-    });
+    }).returning({ id: offlineSaleCollections.id });
+    let proofDocumentId: string | null = null;
+    if (input.proof) {
+      const [document] = await tx.insert(offlineSaleDocuments).values({ ...input.proof, offlineSaleId: sale.id, kind: "payment_proof", uploadedBy: input.actorUsername }).returning({ id: offlineSaleDocuments.id });
+      proofDocumentId = document.id;
+    }
     await tx.update(offlineSales).set({ expectedNextPaymentDate: amountPaisa < pending ? input.expectedNextPaymentDate! : null, updatedAt: new Date() }).where(eq(offlineSales.id, sale.id));
     await tx.insert(auditEvents).values({
       actorUsername: input.actorUsername,
       action: "offline_sale.collection_recorded",
       entityType: "offline_sale",
       entityId: sale.id,
-      newValue: { amountPaisa, reference },
+      newValue: { amountPaisa, reference, collectionId: collection.id, proofDocumentId, paymentMode: input.paymentMode, transactionId: input.paymentTransactionId, receiverName: input.paymentReceiverName },
       reason: "Offline payment collection recorded by sales workspace",
     });
     return { sale: { ...toRow(sale, collectedBefore + amountPaisa), expectedNextPaymentDate: amountPaisa < pending ? input.expectedNextPaymentDate! : null }, duplicate: false };
