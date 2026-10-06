@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { randomUUID as uuid } from "node:crypto";
 import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
@@ -265,8 +265,8 @@ export async function createOfflineSale(input: {
   const dateKey = input.saleDate.replaceAll("-", "");
   const saleNumber = `OFF-${dateKey}-${randomUUID().slice(0, 8).toUpperCase()}`;
   return db.transaction(async (tx) => {
-    const existingInvoice = await tx.select({ id: offlineSales.id }).from(offlineSales).where(eq(offlineSales.billingInvoiceNumber, billingInvoiceNumber)).limit(1);
-    if (existingInvoice[0]) throw new OfflineSalesError("INVALID_SALE", "That billing invoice number has already been used.");
+    const existingInvoice = await tx.select({ id: offlineSales.id }).from(offlineSales).where(and(eq(offlineSales.billingInvoiceNumber, billingInvoiceNumber), ne(offlineSales.deliveryStatus, "cancelled"))).limit(1);
+    if (existingInvoice[0]) throw new OfflineSalesError("INVALID_SALE", "That billing invoice number belongs to an order that has not been cancelled.");
     const balances = await tx.select().from(inventoryBalances).where(and(inArray(inventoryBalances.productId, lines.map((line) => line.productId)), eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId), eq(inventoryBalances.bucket, "retail"))).orderBy(inventoryBalances.productId).for("update");
     const balanceByProduct = new Map(balances.map((balance) => [balance.productId, balance]));
     for (const line of lines) {

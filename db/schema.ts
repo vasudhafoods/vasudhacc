@@ -242,7 +242,7 @@ export const offlineSales = pgTable("offline_sales", {
   ...auditColumns,
 }, (table) => [
   uniqueIndex("offline_sales_number_unique").on(table.saleNumber),
-  uniqueIndex("offline_sales_billing_invoice_number_unique").on(table.billingInvoiceNumber),
+  uniqueIndex("offline_sales_billing_invoice_number_unique").on(table.billingInvoiceNumber).where(sql`${table.deliveryStatus} <> 'cancelled'`),
   uniqueIndex("offline_sales_idempotency_unique").on(table.idempotencyKey),
   index("offline_sales_sale_date_idx").on(table.saleDate),
   index("offline_sales_customer_type_idx").on(table.customerType, table.saleDate),

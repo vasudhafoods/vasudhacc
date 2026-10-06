@@ -85,6 +85,13 @@
       "when": 1790896800000,
       "tag": "0011_offline_sales_delivered_at",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791244800000,
+      "tag": "0012_reuse_cancelled_invoice_numbers",
+      "breakpoints": true
     }
   ]
 }
