@@ -134,7 +134,7 @@ export async function processShopifyOutbox(options: ProcessShopifyOutboxOptions 
     updatedAt: now,
   }).where(and(
     eq(integrationOutbox.status, "processing"),
-    sql`${integrationOutbox.lockedAt} is null or ${integrationOutbox.lockedAt} < ${staleBefore}`,
+    sql`${integrationOutbox.lockedAt} is null or ${integrationOutbox.lockedAt} < ${staleBefore.toISOString()}::timestamptz`,
   ));
 
   const dueCondition = options.force ? undefined : lte(integrationOutbox.nextAttemptAt, now);
