@@ -5,14 +5,7 @@ import { inventoryBalances, inventoryBatches, inventoryTransactionLines, invento
 import { LOW_STOCK_THRESHOLD } from "@/lib/constants/inventory";
 import type { PhysicalInventoryMovement, PhysicalInventoryProduct } from "@/types/physical-inventory";
 import type { InventoryStatus } from "@/types/inventory";
-
-function isSalesBundle(name: string): boolean {
-  return /\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(name);
-}
-
-function displayName(name: string): string {
-  return name.replace(/\s*[·|–—-]\s*pack\s+of\s+1\b.*$/i, "").trim() || name;
-}
+import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
 
 function stockStatus(actual: number): InventoryStatus {
   if (actual <= 0) return "out-of-stock";
@@ -44,7 +37,7 @@ function buildProduct(rows: {
     id: first.id,
     sku: first.sku,
     name: first.name,
-    displayName: displayName(first.name),
+    displayName: physicalUnitDisplayName(first.name),
     packSize: first.packSize,
     category: first.category,
     unitPricePaisa: first.unitPricePaisa,
@@ -85,7 +78,7 @@ export async function getPhysicalInventoryProducts(): Promise<PhysicalInventoryP
   type InventoryRow = (typeof rows)[number] & { expiryDate: Date | null };
   const groups = new Map<string, InventoryRow[]>();
   for (const row of rows) {
-    if (isSalesBundle(row.name)) continue;
+    if (!isPhysicalUnitProduct(row.name)) continue;
     const current = groups.get(row.id) ?? [];
     current.push({ ...row, expiryDate: expiryByProduct.get(row.id) ?? null });
     groups.set(row.id, current);

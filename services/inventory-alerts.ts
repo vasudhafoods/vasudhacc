@@ -2,13 +2,17 @@ import "server-only";
 import { readOperationsSettings } from "@/services/operations-store";
 import type { CurrentInventoryResult } from "@/types/shopify";
 import type { AlertDeliveryResult } from "@/types/operations";
+import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
 
 function buildSummary(inventory: CurrentInventoryResult, defaultThreshold: number, thresholds: Record<string, number>) {
-  const attention = inventory.items.filter((item) => item.available <= (thresholds[item.productId] ?? defaultThreshold));
+  const physicalItems = inventory.items.filter((item) => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`));
+  const attention = physicalItems.filter((item) => item.available <= (thresholds[item.productId] ?? defaultThreshold));
   const out = attention.filter((item) => item.available <= 0).length;
   const low = attention.length - out;
-  const details = attention.slice(0, 15).map((item) => `${item.productTitle} / ${item.variantTitle} (${item.locationName}): ${item.available}`).join("\n");
-  return { subject: `Vasudha inventory summary: ${out} out, ${low} low`, text: `Inventory: ${inventory.summary.totalInventory}\nProducts: ${inventory.summary.totalProducts}\nOut of stock rows: ${out}\nLow stock rows: ${low}${details ? `\n\nAttention:\n${details}` : ""}` };
+  const details = attention.slice(0, 15).map((item) => `${physicalUnitDisplayName(item.productTitle)} (${item.locationName}): ${item.available} packets`).join("\n");
+  const total = physicalItems.reduce((sum, item) => sum + item.available, 0);
+  const products = new Set(physicalItems.map((item) => item.productId)).size;
+  return { subject: `Vasudha inventory summary: ${out} out, ${low} low`, text: `Inventory: ${total} physical packets\nProducts: ${products}\nOut of stock rows: ${out}\nLow stock rows: ${low}${details ? `\n\nAttention:\n${details}` : ""}` };
 }
 
 function kolkataDateKey(value: string): string {

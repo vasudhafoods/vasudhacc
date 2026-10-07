@@ -16,6 +16,7 @@ import {
 } from "@/db/schema";
 import type { WarehouseActivity, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 import { getShopifyWarehouseOrders } from "@/services/shopify-fulfillment";
+import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
 
 export class WarehouseProductError extends Error {
   constructor(readonly code: "INVALID_PRODUCT" | "SKU_EXISTS" | "BARCODE_EXISTS", message: string) {
@@ -86,15 +87,15 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
   for (const mapping of mappingRows) if (mapping.status === "mapped" && !mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping.id);
   const productOptions: WarehouseProductOption[] = productRows.flatMap((product) => {
     const shopifyMappingId = mappingByProduct.get(product.id) ?? null;
-    const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
-    if (shopifyProducts.has(product.id) && packMatch && Number(packMatch[1]) !== 1) return [];
-    return [{ ...product, shopifyMappingId, onShopify: shopifyProducts.has(product.id) }];
+    if (!isPhysicalUnitProduct(product.name)) return [];
+    return [{ ...product, name: physicalUnitDisplayName(product.name), shopifyMappingId, onShopify: shopifyProducts.has(product.id) }];
   });
 
   const transactionActivities: WarehouseActivity[] = [];
   if (transactionRows.length) {
     const lines = await db.select({
       transactionId: inventoryTransactionLines.transactionId,
+      productId: inventoryTransactionLines.productId,
       bucket: inventoryTransactionLines.bucket,
       quantity: inventoryTransactionLines.quantityDelta,
       productName: products.name,
@@ -105,7 +106,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
       .innerJoin(warehouseLocations, eq(inventoryTransactionLines.warehouseLocationId, warehouseLocations.id))
       .where(inArray(inventoryTransactionLines.transactionId, transactionRows.map((transaction) => transaction.id)));
     const linesByTransaction = new Map<string, typeof lines>();
-    for (const line of lines) {
+    for (const line of lines.filter((row) => isPhysicalUnitProduct(row.productName))) {
       const existing = linesByTransaction.get(line.transactionId) ?? [];
       existing.push(line);
       linesByTransaction.set(line.transactionId, existing);
@@ -113,6 +114,26 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     for (const transaction of transactionRows) {
       const transactionLines = linesByTransaction.get(transaction.id) ?? [];
       const first = transactionLines[0];
+      if (transaction.type === "channel_transfer" && ["retail_dispatch_replenishment", "retail_sales_order_replenishment"].includes(String(transaction.metadata.action))) {
+        const moved = transactionLines.filter((line) => line.bucket === "retail" && line.quantity > 0);
+        const totalQuantity = moved.reduce((total, line) => total + line.quantity, 0);
+        const transferRows = Array.isArray(transaction.metadata.stockTransfers) ? transaction.metadata.stockTransfers as { productId?: unknown; movedFromBuffer?: unknown; movedFromOnline?: unknown }[] : [];
+        transactionActivities.push({
+          id: `transfer-${transaction.id}`,
+          kind: "stock_transferred",
+          title: `${totalQuantity} individual packets moved into Retail${transaction.metadata.action === "retail_sales_order_replenishment" ? " for sales order" : " for dispatch"}`,
+          reference: transaction.referenceId ? `${transaction.transactionNumber} · ${transaction.referenceId}` : transaction.transactionNumber,
+          occurredAt: transaction.occurredAt.toISOString(),
+          details: transferRows.flatMap((row) => {
+            if (typeof row.productId !== "string") return [];
+            const product = moved.find((line) => line.productId === row.productId);
+            if (!product) return [];
+            const sources = [Number(row.movedFromBuffer) > 0 ? `Buffer: ${row.movedFromBuffer}` : "", Number(row.movedFromOnline) > 0 ? `Online: ${row.movedFromOnline}` : ""].filter(Boolean).join(", ");
+            return [`${physicalUnitDisplayName(product.productName)} (${product.sku}): ${sources}`];
+          }),
+        });
+        continue;
+      }
       if (transaction.type === "retail_issue") {
         const destination = typeof transaction.metadata.destination === "string" ? transaction.metadata.destination : "Retail destination";
         const totalQuantity = transactionLines.reduce((total, line) => total + Math.abs(line.quantity), 0);
@@ -124,7 +145,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
           occurredAt: transaction.occurredAt.toISOString(),
           details: [
             first ? `Location: ${first.locationName}` : "",
-            ...transactionLines.map((line) => `${line.productName} (${line.sku}): ${Math.abs(line.quantity)}`),
+            ...transactionLines.map((line) => `${physicalUnitDisplayName(line.productName)} (${line.sku}): ${Math.abs(line.quantity)}`),
           ].filter(Boolean),
         });
         continue;
@@ -138,7 +159,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
           title: `${totalQuantity} returned packet${totalQuantity === 1 ? "" : "s"} received into QC`,
           reference: transaction.referenceId ? `${channel} · ${transaction.referenceId}` : `${channel} · ${transaction.transactionNumber}`,
           occurredAt: transaction.occurredAt.toISOString(),
-          details: [first ? `${first.productName} (${first.sku})` : "", first ? `Location: ${first.locationName}` : ""].filter(Boolean),
+          details: [first ? `${physicalUnitDisplayName(first.productName)} (${first.sku})` : "", first ? `Location: ${first.locationName}` : ""].filter(Boolean),
         });
         continue;
       }
@@ -151,7 +172,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
           title: `${moved?.quantity ?? 0} QC packet${moved?.quantity === 1 ? "" : "s"} moved to ${target}`,
           reference: transaction.referenceId ? `${transaction.transactionNumber} · ${transaction.referenceId}` : transaction.transactionNumber,
           occurredAt: transaction.occurredAt.toISOString(),
-          details: [moved ? `${moved.productName} (${moved.sku})` : "", moved ? `Location: ${moved.locationName}` : ""].filter(Boolean),
+          details: [moved ? `${physicalUnitDisplayName(moved.productName)} (${moved.sku})` : "", moved ? `Location: ${moved.locationName}` : ""].filter(Boolean),
         });
         continue;
       }
@@ -240,6 +261,7 @@ export async function createWarehouseProduct(input: {
     throw new WarehouseProductError("INVALID_PRODUCT", "SKU must be 2–60 characters and use only letters, numbers, dots, dashes, slashes, or underscores.");
   }
   if (name.length < 2 || name.length > 200) throw new WarehouseProductError("INVALID_PRODUCT", "Product name must be between 2 and 200 characters.");
+  if (!isPhysicalUnitProduct(name)) throw new WarehouseProductError("INVALID_PRODUCT", "Create one individual physical product per SKU. Pack listings and bundles are made from these units and cannot hold separate warehouse stock.");
   if (packSize && packSize.length > 100) throw new WarehouseProductError("INVALID_PRODUCT", "Pack size must be 100 characters or fewer.");
   if (barcode && !/^[A-Za-z0-9._/-]{4,100}$/.test(barcode)) throw new WarehouseProductError("INVALID_PRODUCT", "Barcode must contain 4–100 letters, numbers, dots, dashes, slashes, or underscores.");
 

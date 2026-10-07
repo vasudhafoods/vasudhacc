@@ -3,10 +3,11 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { randomUUID as uuid } from "node:crypto";
-import { auditEvents, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSaleDocuments, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
+import { auditEvents, integrationOutbox, inventoryBalances, inventoryTransactionLines, inventoryTransactions, offlineSaleCollections, offlineSaleDocuments, offlineSales, products, salesCustomers, shopifyMappings, warehouseLocations } from "@/db/schema";
 import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
 import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
+import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
 import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 const MAX_AMOUNT_PAISA = 1_000_000_000;
@@ -85,25 +86,25 @@ function toRow(sale: typeof offlineSales.$inferSelect, collectedAmountPaisa: num
 
 export async function getOfflineSalesEntryData(): Promise<OfflineSalesEntryData> {
   const db = getDatabase();
-  const [productsRows, locations, retailRows, livePrices, customers, mappings] = await Promise.all([
+  const [productsRows, locations, retailRows, livePrices, customers] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, category: products.category, unitPricePaisa: products.unitPricePaisa }).from(products).where(eq(products.active, true)).orderBy(products.name),
     db.select({ id: warehouseLocations.id, code: warehouseLocations.code, name: warehouseLocations.name }).from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
-    db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved }).from(inventoryBalances).where(eq(inventoryBalances.bucket, "retail")),
+    db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, bucket: inventoryBalances.bucket, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved }).from(inventoryBalances).where(inArray(inventoryBalances.bucket, ["retail", "buffer", "online"])),
     fetchShopifyPricesBySku().catch(() => new Map<string, number>()),
     db.select({ id: salesCustomers.id, name: salesCustomers.name, companyName: salesCustomers.companyName, address: salesCustomers.address, phone: salesCustomers.phone, gstNumber: salesCustomers.gstNumber }).from(salesCustomers).where(eq(salesCustomers.active, true)).orderBy(salesCustomers.name),
-    db.select({ productId: shopifyMappings.productId }).from(shopifyMappings),
   ]);
-  const importedProducts = new Set(mappings.map(mapping => mapping.productId));
   return {
     products: productsRows.flatMap((product) => {
-      if (importedProducts.has(product.id) && /\b(combo|bundle|variety|bestsellers?|medley|box|delights|assorted)\b/i.test(product.name)) return [];
-      const packMatch = product.name.match(/\bpack\s+of\s+(\d+)\b/i);
-      if (importedProducts.has(product.id) && packMatch && Number(packMatch[1]) !== 1) return [];
-      const displayName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+1\b.*$/i, "").trim() || product.name;
+      if (!isPhysicalUnitProduct(product.name)) return [];
+      const displayName = physicalUnitDisplayName(product.name);
       return [{ ...product, name: displayName, unitPricePaisa: product.unitPricePaisa > 0 ? product.unitPricePaisa : listedOfflineUnitPricePaisa(displayName) ?? livePrices.get(product.sku.trim().toUpperCase()) ?? product.unitPricePaisa }];
     }),
     locations,
-    retailBalances: retailRows.map((row) => ({ productId: row.productId, warehouseLocationId: row.warehouseLocationId, available: Math.max(0, row.onHand - row.reserved) })),
+    retailBalances: [...retailRows.reduce((totals, row) => {
+      const key = `${row.productId}:${row.warehouseLocationId}`;
+      totals.set(key, { productId: row.productId, warehouseLocationId: row.warehouseLocationId, available: (totals.get(key)?.available ?? 0) + Math.max(0, row.onHand - row.reserved) });
+      return totals;
+    }, new Map<string, { productId: string; warehouseLocationId: string; available: number }>()).values()],
     customers,
   };
 }
@@ -260,20 +261,41 @@ export async function createOfflineSale(input: {
   const existing = await db.select().from(offlineSales).where(eq(offlineSales.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing[0]) {
     const collections = await db.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(eq(offlineSaleCollections.offlineSaleId, existing[0].id));
-    return { sale: toRow(existing[0], collections.reduce((sum, collection) => sum + collection.amountPaisa, 0)), duplicate: true };
+    const [transfer] = await db.select({ id: inventoryTransactions.id, metadata: inventoryTransactions.metadata }).from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, `${input.idempotencyKey}:retail-replenish`)).limit(1);
+    const stockTransfers = Array.isArray(transfer?.metadata.stockTransfers) ? transfer.metadata.stockTransfers as { productId: string; movedFromBuffer: number; movedFromOnline: number }[] : [];
+    return { sale: toRow(existing[0], collections.reduce((sum, collection) => sum + collection.amountPaisa, 0)), duplicate: true, stockTransferTransactionId: transfer?.id ?? null, stockTransfers };
   }
   const dateKey = input.saleDate.replaceAll("-", "");
   const saleNumber = `OFF-${dateKey}-${randomUUID().slice(0, 8).toUpperCase()}`;
   return db.transaction(async (tx) => {
     const existingInvoice = await tx.select({ id: offlineSales.id }).from(offlineSales).where(and(eq(offlineSales.billingInvoiceNumber, billingInvoiceNumber), ne(offlineSales.deliveryStatus, "cancelled"))).limit(1);
     if (existingInvoice[0]) throw new OfflineSalesError("INVALID_SALE", "That billing invoice number belongs to an order that has not been cancelled.");
-    const balances = await tx.select().from(inventoryBalances).where(and(inArray(inventoryBalances.productId, lines.map((line) => line.productId)), eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId), eq(inventoryBalances.bucket, "retail"))).orderBy(inventoryBalances.productId).for("update");
-    const balanceByProduct = new Map(balances.map((balance) => [balance.productId, balance]));
-    for (const line of lines) {
-      const balance = balanceByProduct.get(line.productId);
-      const available = balance ? balance.onHand - balance.reserved : 0;
-      if (!balance || available < line.quantity) throw new OfflineSalesError("INVALID_SALE", `${line.productName} has only ${available} available Retail units at the selected warehouse.`);
-    }
+    const productIds = lines.map((line) => line.productId);
+    const catalog = await tx.select({ id: products.id, name: products.name, active: products.active }).from(products).where(inArray(products.id, productIds));
+    if (catalog.length !== productIds.length || catalog.some((product) => !product.active || !isPhysicalUnitProduct(product.name))) throw new OfflineSalesError("INVALID_SALE", "Choose active individual physical products. Shopify pack listings and bundles do not hold separate warehouse stock.");
+    const buckets = ["retail", "buffer", "online"] as const;
+    await tx.insert(inventoryBalances).values(productIds.flatMap((productId) => buckets.map((bucket) => ({ productId, warehouseLocationId: input.warehouseLocationId, bucket }))))
+      .onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
+    const balances = await tx.select().from(inventoryBalances).where(and(inArray(inventoryBalances.productId, productIds), eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId), inArray(inventoryBalances.bucket, [...buckets]))).orderBy(inventoryBalances.productId, inventoryBalances.bucket).for("update");
+    const balanceByScope = new Map(balances.map((balance) => [`${balance.productId}:${balance.bucket}`, balance]));
+    const stockPlans = lines.map((line) => {
+      const retail = balanceByScope.get(`${line.productId}:retail`)!;
+      const buffer = balanceByScope.get(`${line.productId}:buffer`)!;
+      const online = balanceByScope.get(`${line.productId}:online`)!;
+      const retailAvailable = Math.max(0, retail.onHand - retail.reserved);
+      let shortfall = Math.max(0, line.quantity - retailAvailable);
+      const movedFromBuffer = Math.min(shortfall, Math.max(0, buffer.onHand - buffer.reserved));
+      shortfall -= movedFromBuffer;
+      const movedFromOnline = Math.min(shortfall, Math.max(0, online.onHand - online.reserved));
+      shortfall -= movedFromOnline;
+      if (shortfall > 0) throw new OfflineSalesError("INVALID_SALE", `${line.productName} has only ${retailAvailable + Math.max(0, buffer.onHand - buffer.reserved) + Math.max(0, online.onHand - online.reserved)} available physical units across Retail, Buffer, and Online at the selected warehouse.`);
+      return { line, retail, buffer, online, movedFromBuffer, movedFromOnline };
+    });
+    const onlinePlans = stockPlans.filter((plan) => plan.movedFromOnline > 0);
+    const mappings = onlinePlans.length ? await tx.select().from(shopifyMappings).where(and(inArray(shopifyMappings.productId, [...new Set(onlinePlans.map((plan) => plan.line.productId))]), eq(shopifyMappings.status, "mapped"))) : [];
+    const mappingByProduct = new Map<string, typeof shopifyMappings.$inferSelect>();
+    for (const mapping of mappings) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping);
+    for (const plan of onlinePlans) if (!mappingByProduct.has(plan.line.productId)) throw new OfflineSalesError("INVALID_SALE", `${plan.line.productName} has Online units but no verified Shopify mapping. Reconcile its listing before moving those units to Retail.`);
     const [sale] = await tx.insert(offlineSales).values({
       saleNumber,
       idempotencyKey: input.idempotencyKey,
@@ -306,9 +328,58 @@ export async function createOfflineSale(input: {
       lines,
       createdBy: input.actorUsername,
     }).returning();
-    for (const line of lines) {
-      const balance = balanceByProduct.get(line.productId)!;
-      await tx.update(inventoryBalances).set({ reserved: sql`${inventoryBalances.reserved} + ${line.quantity}`, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+    const stockTransfers = stockPlans.map((plan) => ({ productId: plan.line.productId, movedFromBuffer: plan.movedFromBuffer, movedFromOnline: plan.movedFromOnline }));
+    const hasTransfers = stockPlans.some((plan) => plan.movedFromBuffer > 0 || plan.movedFromOnline > 0);
+    let stockTransferTransactionId: string | null = null;
+    let transferLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
+    const transferPrevious: Record<string, number> = {};
+    const transferNext: Record<string, number> = {};
+    if (hasTransfers) {
+      const transferNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
+      const [transfer] = await tx.insert(inventoryTransactions).values({
+        transactionNumber: transferNumber,
+        type: "channel_transfer",
+        idempotencyKey: `${input.idempotencyKey}:retail-replenish`,
+        referenceId: billingInvoiceNumber,
+        actorUsername: input.actorUsername,
+        reason: "Retail sales order replenishment from Buffer and Online stock",
+        occurredAt: date,
+        metadata: { action: "retail_sales_order_replenishment", offlineSaleId: sale.id, saleNumber, stockTransfers },
+      }).returning({ id: inventoryTransactions.id });
+      stockTransferTransactionId = transfer.id;
+    }
+    for (const plan of stockPlans) {
+      const { line, retail, buffer, online, movedFromBuffer, movedFromOnline } = plan;
+      if (movedFromBuffer > 0) {
+        const closing = buffer.onHand - movedFromBuffer;
+        await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, buffer.id));
+        transferLines.push({ transactionId: stockTransferTransactionId!, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "buffer", quantityDelta: -movedFromBuffer, openingBalance: buffer.onHand, closingBalance: closing });
+        transferPrevious[`${line.productId}:buffer`] = buffer.onHand;
+        transferNext[`${line.productId}:buffer`] = closing;
+      }
+      if (movedFromOnline > 0) {
+        const closing = online.onHand - movedFromOnline;
+        await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, online.id));
+        transferLines.push({ transactionId: stockTransferTransactionId!, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "online", quantityDelta: -movedFromOnline, openingBalance: online.onHand, closingBalance: closing });
+        transferPrevious[`${line.productId}:online`] = online.onHand;
+        transferNext[`${line.productId}:online`] = closing;
+      }
+      const movedToRetail = movedFromBuffer + movedFromOnline;
+      const retailClosing = retail.onHand + movedToRetail;
+      await tx.update(inventoryBalances).set({ onHand: retailClosing, reserved: sql`${inventoryBalances.reserved} + ${line.quantity}`, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, retail.id));
+      if (movedToRetail > 0) {
+        transferLines.push({ transactionId: stockTransferTransactionId!, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "retail", quantityDelta: movedToRetail, openingBalance: retail.onHand, closingBalance: retailClosing });
+        transferPrevious[`${line.productId}:retail`] = retail.onHand;
+        transferNext[`${line.productId}:retail`] = retailClosing;
+      }
+    }
+    if (hasTransfers) {
+      if (transferLines.length) await tx.insert(inventoryTransactionLines).values(transferLines);
+      if (onlinePlans.length) await tx.insert(integrationOutbox).values(onlinePlans.map((plan, index) => {
+        const mapping = mappingByProduct.get(plan.line.productId)!;
+        return { transactionId: stockTransferTransactionId!, operation: "shopify_inventory_adjust", idempotencyKey: `${input.idempotencyKey}:retail-replenish:shopify:${index}`, payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantityDelta: -plan.movedFromOnline, reason: "correction" } };
+      }));
+      await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.channel_transfer", entityType: "inventory_transaction", entityId: stockTransferTransactionId!, previousValue: transferPrevious, newValue: transferNext, reason: "Individual units shifted into Retail to cover sales order demand." });
     }
     if (input.initialCollectionPaisa > 0) {
       await tx.insert(offlineSaleCollections).values({
@@ -330,10 +401,10 @@ export async function createOfflineSale(input: {
       action: "offline_sale.created",
       entityType: "offline_sale",
       entityId: sale.id,
-      newValue: { saleNumber, billingInvoiceNumber, customerName, customerCompanyName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, requestedDispatchDate, status: "packing", reservedProductCount: lines.length },
-      reason: "Offline sales order raised; Retail stock reserved for warehouse preparation",
+      newValue: { saleNumber, billingInvoiceNumber, customerName, customerCompanyName, customerType: input.customerType, totalAmountPaisa, initialCollectionPaisa: input.initialCollectionPaisa, requestedDispatchDate, status: "packing", reservedProductCount: lines.length, stockTransferTransactionId },
+      reason: hasTransfers ? "Offline sales order raised; stock moved into Retail from Buffer / Online and reserved for warehouse preparation" : "Offline sales order raised; Retail stock reserved for warehouse preparation",
     });
-    return { sale: toRow(sale, input.initialCollectionPaisa), duplicate: false };
+    return { sale: toRow(sale, input.initialCollectionPaisa), duplicate: false, stockTransferTransactionId, stockTransfers };
   });
 }
 

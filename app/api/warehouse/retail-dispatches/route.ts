@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { inventoryReceiptAttachments, inventoryTransactions } from "@/db/schema";
 import { dispatchRetailStock, InventoryCommandError } from "@/services/inventory-ledger";
+import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,10 @@ export async function POST(request: Request) {
       actorUsername: session.username,
       idempotencyKey: request.headers.get("idempotency-key")?.trim() ?? "",
     });
-    return Response.json({ ok: true, result }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
+    const shopifySync = result.stockTransferTransactionId
+      ? await attemptAutomaticShopifySync(result.stockTransferTransactionId, result.shopifySync)
+      : "not_required";
+    return Response.json({ ok: true, result: { ...result, shopifySync } }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof InventoryCommandError) {
       return Response.json({ error: { code: error.code, message: error.message } }, { status: error.code === "NOT_FOUND" ? 404 : 400 });

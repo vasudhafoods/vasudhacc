@@ -6,13 +6,9 @@ import { getInventoryFeed } from "@/lib/inventory/live-data";
 import { buildCommandCenterView } from "@/services/command-center";
 import { fetchSalesReport } from "@/services/shopify-sales";
 import { getWarehouseFoundationStatus } from "@/services/warehouse-foundation";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 import type { ExecutiveDashboardData, ExecutiveRecommendation } from "@/types/executive";
 import type { SalesReport } from "@/types/sales";
-
-function packMultiplier(name: string): number {
-  const match = name.match(/\bpack\s+of\s+(\d+)\b/i);
-  return match ? Number(match[1]) : 1;
-}
 
 async function onlineLedgerByShopifyProduct(): Promise<Map<string, number>> {
   if (!process.env.DATABASE_URL?.trim()) return new Map();
@@ -26,7 +22,7 @@ async function onlineLedgerByShopifyProduct(): Promise<Map<string, number>> {
     ]);
     const shopifyProductByBaseProduct = new Map<string, string>();
     for (const mapping of mappings) {
-      if (packMultiplier(mapping.productName) === 1) shopifyProductByBaseProduct.set(mapping.productId, mapping.shopifyProductId);
+      if (isPhysicalUnitProduct(mapping.productName)) shopifyProductByBaseProduct.set(mapping.productId, mapping.shopifyProductId);
     }
     const stock = new Map<string, number>();
     for (const balance of balances) {

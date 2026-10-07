@@ -1,6 +1,6 @@
-// Shopify is opt-in per receipt: 40/40/20 when checked, otherwise all usable stock to Retail.
-export function receiptAllocation(usableQuantity: number, onShopify: boolean) {
-  const online = onShopify ? Math.round(usableQuantity * 0.4) : 0;
-  const retail = Math.round(usableQuantity * (onShopify ? 0.4 : 1));
+// Every usable physical packet is allocated across Online, Retail, and Buffer.
+export function receiptAllocation(usableQuantity: number) {
+  const online = Math.round(usableQuantity * 0.4);
+  const retail = Math.round(usableQuantity * 0.4);
   return { online, retail, buffer: usableQuantity - online - retail };
 }

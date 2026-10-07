@@ -17,6 +17,7 @@ import {
 import type { ShopifySyncStatus } from "@/types/warehouse";
 import { addProductToShopify } from "@/services/shopify-products";
 import { receiptAllocation } from "@/lib/inventory/allocation";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 
 export class InventoryCommandError extends Error {
   constructor(readonly code: "INVALID_TRANSFER" | "INVALID_RECEIPT" | "INVALID_DISPATCH" | "INVALID_RETURN" | "INVALID_DISPOSAL" | "INSUFFICIENT_STOCK" | "MAPPING_REQUIRED" | "NOT_FOUND", message: string) {
@@ -102,7 +103,9 @@ export interface RetailDispatchResult {
   duplicate: boolean;
   totalQuantity: number;
   destination: string;
-  lines: { productId: string; productName: string; sku: string; quantity: number; closingRetailBalance: number }[];
+  stockTransferTransactionId: string | null;
+  shopifySync: ShopifySyncStatus;
+  lines: { productId: string; productName: string; sku: string; quantity: number; closingRetailBalance: number; movedFromBuffer: number; movedFromOnline: number }[];
 }
 
 export interface ReceiveReturnInput {
@@ -160,17 +163,16 @@ export interface DisposeInventoryResult {
 
 function validateTransfer(input: TransferInventoryInput) {
   if (input.fromBucket === input.toBucket) throw new InventoryCommandError("INVALID_TRANSFER", "Source and destination buckets must differ.");
-  if (input.toBucket === "retail" && input.fromBucket !== "qc") throw new InventoryCommandError("INVALID_TRANSFER", "Only inspected QC stock can be released to Retail.");
-  if (input.fromBucket === "online") throw new InventoryCommandError("INVALID_TRANSFER", "Moving stock out of Online is disabled until Shopify committed inventory is synchronized.");
+  if (input.toBucket === "retail" && !["qc", "buffer", "online"].includes(input.fromBucket)) throw new InventoryCommandError("INVALID_TRANSFER", "Retail can receive stock from inspected QC, Buffer, or Online.");
   if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0) throw new InventoryCommandError("INVALID_TRANSFER", "Quantity must be a positive whole number.");
   if (!input.idempotencyKey.trim() || input.idempotencyKey.length > 200) throw new InventoryCommandError("INVALID_TRANSFER", "A valid idempotency key is required.");
   if (!input.actorUsername.trim() || !input.reason.trim()) throw new InventoryCommandError("INVALID_TRANSFER", "Actor and reason are required.");
-  if (input.toBucket === "online" && !input.shopifyMappingId) {
-    throw new InventoryCommandError("MAPPING_REQUIRED", "A verified Shopify mapping is required for Online transfers.");
+  if ((input.fromBucket === "online" || input.toBucket === "online") && !input.shopifyMappingId) {
+    throw new InventoryCommandError("MAPPING_REQUIRED", "A verified Shopify mapping is required when moving Online stock.");
   }
 }
 
-function validateReceipt(input: ReceiveStockInput, onShopify: boolean) {
+function validateReceipt(input: ReceiveStockInput) {
   const quantities = [input.receivedQuantity, input.damagedQuantity, input.onlineQuantity, input.retailQuantity, input.bufferQuantity];
   if (quantities.some((quantity) => !Number.isSafeInteger(quantity) || quantity < 0) || input.receivedQuantity <= 0) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Receipt quantities must be non-negative whole numbers and received quantity must be positive.");
@@ -184,15 +186,12 @@ function validateReceipt(input: ReceiveStockInput, onShopify: boolean) {
   if (!input.invoiceTransactionId && (!Number.isSafeInteger(input.invoiceValuePaisa) || (input.invoiceValuePaisa ?? 0) <= 0)) throw new InventoryCommandError("INVALID_RECEIPT", "A valid invoice value greater than zero is required.");
   if (input.expiryDate < input.receivedAt) throw new InventoryCommandError("INVALID_RECEIPT", "Expiry date cannot be before the receiving date.");
   const usableQuantity = input.receivedQuantity - input.damagedQuantity;
-  const { online: expectedOnlineQuantity, retail: expectedRetailQuantity, buffer: expectedBufferQuantity } = receiptAllocation(usableQuantity, onShopify);
+  const { online: expectedOnlineQuantity, retail: expectedRetailQuantity, buffer: expectedBufferQuantity } = receiptAllocation(usableQuantity);
   if (input.onlineQuantity !== expectedOnlineQuantity || input.retailQuantity !== expectedRetailQuantity || input.bufferQuantity !== expectedBufferQuantity) {
     throw new InventoryCommandError("INVALID_RECEIPT", `Usable stock must be allocated automatically: ${expectedOnlineQuantity} packets to Shopify, ${expectedRetailQuantity} packets to Retail and ${expectedBufferQuantity} packets to Buffer.`);
   }
   if (!input.batchNumber.trim() || !input.source.trim() || !input.reason.trim() || !input.actorUsername.trim() || !input.idempotencyKey.trim()) {
     throw new InventoryCommandError("INVALID_RECEIPT", "Batch, source, reason, actor and idempotency key are required.");
-  }
-  if (input.onlineQuantity > 0 && !input.shopifyMappingId && !input.addToShopify) {
-    throw new InventoryCommandError("MAPPING_REQUIRED", "A verified Shopify mapping is required when received stock is allocated Online.");
   }
 }
 
@@ -253,9 +252,22 @@ async function readRetailDispatchResult(transactionId: string, transactionNumber
       .innerJoin(products, eq(products.id, inventoryTransactionLines.productId))
       .where(and(eq(inventoryTransactionLines.transactionId, transactionId), eq(inventoryTransactionLines.bucket, "retail"))),
   ]);
-  const destination = typeof transaction[0]?.metadata.destination === "string" ? transaction[0].metadata.destination : "Retail destination";
-  const resultLines = lines.map((line) => ({ ...line, quantity: Math.abs(line.quantity) }));
-  return { transactionId, transactionNumber, duplicate, destination, totalQuantity: resultLines.reduce((total, line) => total + line.quantity, 0), lines: resultLines };
+  const metadata = transaction[0]?.metadata ?? {};
+  const destination = typeof metadata.destination === "string" ? metadata.destination : "Retail destination";
+  const stockTransferTransactionId = typeof metadata.stockTransferTransactionId === "string" ? metadata.stockTransferTransactionId : null;
+  const transfers = Array.isArray(metadata.stockTransfers) ? metadata.stockTransfers as { productId?: unknown; movedFromBuffer?: unknown; movedFromOnline?: unknown }[] : [];
+  const transferByProduct = new Map(transfers.filter((line) => typeof line.productId === "string").map((line) => [line.productId as string, {
+    movedFromBuffer: Number(line.movedFromBuffer) || 0,
+    movedFromOnline: Number(line.movedFromOnline) || 0,
+  }]));
+  const resultLines = lines.map((line) => ({
+    ...line,
+    quantity: Math.abs(line.quantity),
+    movedFromBuffer: transferByProduct.get(line.productId)?.movedFromBuffer ?? 0,
+    movedFromOnline: transferByProduct.get(line.productId)?.movedFromOnline ?? 0,
+  }));
+  const requiresShopifySync = resultLines.some((line) => line.movedFromOnline > 0);
+  return { transactionId, transactionNumber, duplicate, destination, totalQuantity: resultLines.reduce((total, line) => total + line.quantity, 0), stockTransferTransactionId, shopifySync: requiresShopifySync ? "pending" : "not_required", lines: resultLines };
 }
 
 export async function dispatchRetailStock(input: RetailDispatchInput): Promise<RetailDispatchResult> {
@@ -268,30 +280,126 @@ export async function dispatchRetailStock(input: RetailDispatchInput): Promise<R
     return readRetailDispatchResult(existing[0].id, existing[0].transactionNumber, true);
   }
 
-  const result = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const orderedLines = [...input.lines].sort((left, right) => left.productId.localeCompare(right.productId));
     const productIds = orderedLines.map((line) => line.productId);
-    const [productRows, balances] = await Promise.all([
-      tx.select({ id: products.id, name: products.name, sku: products.sku }).from(products).where(and(inArray(products.id, productIds), eq(products.active, true))),
-      tx.select().from(inventoryBalances).where(and(
-        inArray(inventoryBalances.productId, productIds),
-        eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId),
-        eq(inventoryBalances.bucket, "retail"),
-      )).orderBy(inventoryBalances.productId).for("update"),
-    ]);
+    const productRows = await tx.select({ id: products.id, name: products.name, sku: products.sku }).from(products)
+      .where(and(inArray(products.id, productIds), eq(products.active, true)));
     const productById = new Map(productRows.map((product) => [product.id, product]));
-    const balanceByProduct = new Map(balances.map((balance) => [balance.productId, balance]));
     if (productRows.length !== productIds.length) throw new InventoryCommandError("NOT_FOUND", "One or more dispatch products are missing or inactive.");
-
-    for (const line of orderedLines) {
-      const balance = balanceByProduct.get(line.productId);
-      const product = productById.get(line.productId);
-      const available = balance ? balance.onHand - balance.reserved : 0;
-      if (!balance || available < line.quantity) throw new InventoryCommandError("INSUFFICIENT_STOCK", `${product?.name ?? "This product"} has only ${available} Retail packets available.`);
+    for (const product of productRows) if (!isPhysicalUnitProduct(product.name)) {
+      throw new InventoryCommandError("INVALID_DISPATCH", "Dispatch individual physical units. Pack listings and bundles do not hold separate warehouse stock.");
     }
 
-    const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const buckets = ["retail", "buffer", "online"] as const;
+    await tx.insert(inventoryBalances).values(productIds.flatMap((productId) => buckets.map((bucket) => ({
+      productId,
+      warehouseLocationId: input.warehouseLocationId,
+      bucket,
+    })))).onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
+    const balances = await tx.select().from(inventoryBalances).where(and(
+      inArray(inventoryBalances.productId, productIds),
+      eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId),
+      inArray(inventoryBalances.bucket, [...buckets]),
+    )).orderBy(inventoryBalances.productId, inventoryBalances.bucket).for("update");
+    const balanceByScope = new Map(balances.map((balance) => [`${balance.productId}:${balance.bucket}`, balance]));
+    const transferPlans = orderedLines.map((line) => {
+      const retail = balanceByScope.get(`${line.productId}:retail`)!;
+      const buffer = balanceByScope.get(`${line.productId}:buffer`)!;
+      const online = balanceByScope.get(`${line.productId}:online`)!;
+      const retailAvailable = Math.max(0, retail.onHand - retail.reserved);
+      const bufferAvailable = Math.max(0, buffer.onHand - buffer.reserved);
+      const onlineAvailable = Math.max(0, online.onHand - online.reserved);
+      let shortfall = Math.max(0, line.quantity - retailAvailable);
+      const movedFromBuffer = Math.min(shortfall, bufferAvailable);
+      shortfall -= movedFromBuffer;
+      const movedFromOnline = Math.min(shortfall, onlineAvailable);
+      shortfall -= movedFromOnline;
+      if (shortfall > 0) {
+        const product = productById.get(line.productId)!;
+        throw new InventoryCommandError("INSUFFICIENT_STOCK", `${product.name} has only ${retailAvailable + bufferAvailable + onlineAvailable} available physical units across Retail, Buffer, and Online.`);
+      }
+      return { line, retail, buffer, online, movedFromBuffer, movedFromOnline };
+    });
+    const onlinePlans = transferPlans.filter((plan) => plan.movedFromOnline > 0);
+    const mappings = onlinePlans.length ? await tx.select().from(shopifyMappings).where(and(
+      inArray(shopifyMappings.productId, [...new Set(onlinePlans.map((plan) => plan.line.productId))]),
+      eq(shopifyMappings.status, "mapped"),
+    )) : [];
+    const mappingByProduct = new Map<string, typeof shopifyMappings.$inferSelect>();
+    for (const mapping of mappings) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping);
+    for (const plan of onlinePlans) if (!mappingByProduct.has(plan.line.productId)) {
+      throw new InventoryCommandError("MAPPING_REQUIRED", `${productById.get(plan.line.productId)?.name ?? "This product"} has Online units but no verified Shopify mapping. Reconcile its listing before moving those units to Retail.`);
+    }
+
     const totalQuantity = orderedLines.reduce((total, line) => total + line.quantity, 0);
+    const stockTransfers = transferPlans.map((plan) => ({
+      productId: plan.line.productId,
+      movedFromBuffer: plan.movedFromBuffer,
+      movedFromOnline: plan.movedFromOnline,
+    }));
+    const hasTransfers = transferPlans.some((plan) => plan.movedFromBuffer > 0 || plan.movedFromOnline > 0);
+    let stockTransferTransactionId: string | null = null;
+    if (hasTransfers) {
+      const transferNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
+      const [transfer] = await tx.insert(inventoryTransactions).values({
+        transactionNumber: transferNumber,
+        type: "channel_transfer",
+        idempotencyKey: `${input.idempotencyKey}:retail-replenish`,
+        referenceId: input.referenceId.trim(),
+        actorUsername: input.actorUsername,
+        reason: "Retail dispatch replenishment from Buffer and Online stock",
+        occurredAt: input.deliveryDate,
+        metadata: { action: "retail_dispatch_replenishment", destination: input.destination.trim(), toBucket: "retail", fromBuckets: ["buffer", "online"], stockTransfers },
+      }).returning({ id: inventoryTransactions.id });
+      stockTransferTransactionId = transfer.id;
+      const transferLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
+      const previousValue: Record<string, number> = {};
+      const newValue: Record<string, number> = {};
+      for (const plan of transferPlans) {
+        const { line, retail, buffer, online, movedFromBuffer, movedFromOnline } = plan;
+        if (movedFromBuffer === 0 && movedFromOnline === 0) continue;
+        if (movedFromBuffer > 0) {
+          const closing = buffer.onHand - movedFromBuffer;
+          await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, buffer.id));
+          transferLines.push({ transactionId: transfer.id, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "buffer", quantityDelta: -movedFromBuffer, openingBalance: buffer.onHand, closingBalance: closing });
+          previousValue[`${line.productId}:buffer`] = buffer.onHand;
+          newValue[`${line.productId}:buffer`] = closing;
+        }
+        if (movedFromOnline > 0) {
+          const closing = online.onHand - movedFromOnline;
+          await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, online.id));
+          transferLines.push({ transactionId: transfer.id, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "online", quantityDelta: -movedFromOnline, openingBalance: online.onHand, closingBalance: closing });
+          previousValue[`${line.productId}:online`] = online.onHand;
+          newValue[`${line.productId}:online`] = closing;
+        }
+        const movedToRetail = movedFromBuffer + movedFromOnline;
+        const retailClosing = retail.onHand + movedToRetail;
+        await tx.update(inventoryBalances).set({ onHand: retailClosing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, retail.id));
+        transferLines.push({ transactionId: transfer.id, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "retail", quantityDelta: movedToRetail, openingBalance: retail.onHand, closingBalance: retailClosing });
+        previousValue[`${line.productId}:retail`] = retail.onHand;
+        newValue[`${line.productId}:retail`] = retailClosing;
+      }
+      if (transferLines.length) await tx.insert(inventoryTransactionLines).values(transferLines);
+      if (onlinePlans.length) {
+        await tx.insert(integrationOutbox).values(onlinePlans.map((plan, index) => {
+          const mapping = mappingByProduct.get(plan.line.productId)!;
+          return {
+            transactionId: transfer.id,
+            operation: "shopify_inventory_adjust" as const,
+            idempotencyKey: `${input.idempotencyKey}:retail-replenish:shopify:${index}`,
+            payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantityDelta: -plan.movedFromOnline, reason: "correction" },
+          };
+        }));
+      }
+      await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.channel_transfer", entityType: "inventory_transaction", entityId: transfer.id, previousValue, newValue, reason: "Individual units shifted into Retail to cover dispatch demand." });
+    }
+
+    const retailAfterTransfer = new Map(transferPlans.map((plan) => [plan.line.productId, {
+      ...plan.retail,
+      onHand: plan.retail.onHand + plan.movedFromBuffer + plan.movedFromOnline,
+    }]));
+    const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
     const [transaction] = await tx.insert(inventoryTransactions).values({
       transactionNumber,
       type: "retail_issue",
@@ -300,7 +408,7 @@ export async function dispatchRetailStock(input: RetailDispatchInput): Promise<R
       actorUsername: input.actorUsername,
       reason: "Retail order dispatched from warehouse",
       occurredAt: input.deliveryDate,
-      metadata: { destination: input.destination.trim(), notes: input.notes?.trim() || null, totalQuantity, lineCount: orderedLines.length, orderType: input.orderType, orderValuePaisa: input.orderValuePaisa, deliveryStatus: input.deliveryStatus, deliveryPartner: input.deliveryPartner.trim(), deliveryCostPaisa: input.deliveryCostPaisa, lrNumber: input.lrNumber.trim(), lines: orderedLines.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa })) },
+      metadata: { destination: input.destination.trim(), notes: input.notes?.trim() || null, totalQuantity, lineCount: orderedLines.length, orderType: input.orderType, orderValuePaisa: input.orderValuePaisa, deliveryStatus: input.deliveryStatus, deliveryPartner: input.deliveryPartner.trim(), deliveryCostPaisa: input.deliveryCostPaisa, lrNumber: input.lrNumber.trim(), stockTransferTransactionId, stockTransfers, lines: orderedLines.map((line) => ({ productId: line.productId, quantity: line.quantity, unitPricePaisa: line.unitPricePaisa })) },
     }).returning({ id: inventoryTransactions.id });
 
     const transactionLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
@@ -308,20 +416,29 @@ export async function dispatchRetailStock(input: RetailDispatchInput): Promise<R
     const previousValue: Record<string, number> = {};
     const newValue: Record<string, number> = {};
     for (const line of orderedLines) {
-      const balance = balanceByProduct.get(line.productId)!;
+      const balance = retailAfterTransfer.get(line.productId)!;
       const product = productById.get(line.productId)!;
       const closingBalance = balance.onHand - line.quantity;
       await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
       transactionLines.push({ transactionId: transaction.id, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket: "retail", quantityDelta: -line.quantity, openingBalance: balance.onHand, closingBalance });
-      responseLines.push({ productId: product.id, productName: product.name, sku: product.sku, quantity: line.quantity, closingRetailBalance: closingBalance });
+      const movement = stockTransfers.find((item) => item.productId === line.productId)!;
+      responseLines.push({ productId: product.id, productName: product.name, sku: product.sku, quantity: line.quantity, closingRetailBalance: closingBalance, movedFromBuffer: movement.movedFromBuffer, movedFromOnline: movement.movedFromOnline });
       previousValue[product.id] = balance.onHand;
       newValue[product.id] = closingBalance;
     }
     await tx.insert(inventoryTransactionLines).values(transactionLines);
     await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.retail_dispatched", entityType: "inventory_transaction", entityId: transaction.id, previousValue, newValue, reason: `Retail dispatch to ${input.destination.trim()} (${input.referenceId.trim()})` });
-    return { transactionId: transaction.id, transactionNumber, duplicate: false, totalQuantity, destination: input.destination.trim(), lines: responseLines };
+    return {
+      transactionId: transaction.id,
+      transactionNumber,
+      duplicate: false,
+      totalQuantity,
+      destination: input.destination.trim(),
+      stockTransferTransactionId,
+      shopifySync: stockTransferTransactionId && onlinePlans.length ? "pending" : "not_required",
+      lines: responseLines,
+    };
   }, { isolationLevel: "serializable" });
-  return result;
 }
 
 export async function receiveReturnedStock(input: ReceiveReturnInput): Promise<ReceiveReturnResult> {
@@ -456,7 +573,7 @@ export async function disposeInventory(input: DisposeInventoryInput): Promise<Di
 
 export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise<ReceiveStockResult> {
   const db = getDatabase();
-  validateReceipt(input, input.addToShopify === true);
+  validateReceipt(input);
   const existing = await db.select({ id: inventoryTransactions.id, transactionNumber: inventoryTransactions.transactionNumber })
     .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, input.idempotencyKey)).limit(1);
   if (existing[0]) return { transactionId: existing[0].id, transactionNumber: existing[0].transactionNumber, duplicate: true, receivedQuantity: input.receivedQuantity, shopifySync: input.onlineQuantity > 0 ? "pending" : "not_required" };
@@ -465,7 +582,7 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
     const [parent] = await db.select().from(inventoryTransactions).where(eq(inventoryTransactions.id, input.invoiceTransactionId)).limit(1);
     if (!parent || parent.type !== "stock_received" || parent.actorUsername !== input.actorUsername || parent.referenceId !== input.referenceId || !Number(parent.invoiceValuePaisa) || parent.supplierName !== input.supplierName?.trim() || parent.idempotencyKey.split(":")[0] !== input.idempotencyKey.split(":")[0]) throw new InventoryCommandError("INVALID_RECEIPT", "The first invoice row must be saved before additional rows.");
   }
-  if (input.addToShopify) {
+  if (input.onlineQuantity > 0) {
     const mappings = await db.select().from(shopifyMappings).where(eq(shopifyMappings.productId, input.productId));
     if (!mappings.length) input = { ...input, shopifyMappingId: (await addProductToShopify(input.productId, input.actorUsername)).mappingId };
     else if (mappings.length === 1 && mappings[0].status === "mapped") input = { ...input, shopifyMappingId: mappings[0].id };
@@ -473,6 +590,10 @@ export async function receiveAndAllocateStock(input: ReceiveStockInput): Promise
   } else input = { ...input, shopifyMappingId: undefined };
 
   return db.transaction(async (tx) => {
+    const [product] = await tx.select({ id: products.id, name: products.name }).from(products)
+      .where(and(eq(products.id, input.productId), eq(products.active, true))).limit(1);
+    if (!product) throw new InventoryCommandError("NOT_FOUND", "The selected product is missing or inactive.");
+    if (!isPhysicalUnitProduct(product.name)) throw new InventoryCommandError("INVALID_RECEIPT", "Receive stock against the individual physical unit. Pack listings and bundles do not hold separate stock.");
     let mapping: typeof shopifyMappings.$inferSelect | null = null;
     if (input.shopifyMappingId) {
       [mapping] = await tx.select().from(shopifyMappings).where(and(eq(shopifyMappings.id, input.shopifyMappingId), eq(shopifyMappings.productId, input.productId), eq(shopifyMappings.status, "mapped"))).limit(1);

@@ -1,7 +1,8 @@
 import "server-only";
-import { count, sql, sum } from "drizzle-orm";
+import { count, eq, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { integrationOutbox, inventoryBalances, inventoryTransactions, products, shopifyMappings, shopifyWebhookEvents } from "@/db/schema";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 
 export interface WarehouseFoundationStatus {
   configured: boolean;
@@ -26,22 +27,24 @@ export async function getWarehouseFoundationStatus(): Promise<WarehouseFoundatio
   try {
     const db = getDatabase();
     await db.execute(sql`select 1`);
-    const [[productCount], [mappingCount], [balanceCount], [transactionCount], [pendingCount], [failedWebhookCount], bucketRows] = await Promise.all([
-      db.select({ value: count() }).from(products),
-      db.select({ value: count() }).from(shopifyMappings),
-      db.select({ value: count() }).from(inventoryBalances),
+    const [[transactionCount], [pendingCount], [failedWebhookCount], productRows, mappingRows, balanceRows] = await Promise.all([
       db.select({ value: count() }).from(inventoryTransactions),
       db.select({ value: count() }).from(integrationOutbox).where(sql`${integrationOutbox.status} in ('pending', 'failed')`),
       db.select({ value: count() }).from(shopifyWebhookEvents).where(sql`${shopifyWebhookEvents.status} = 'failed'`),
-      db.select({ bucket: inventoryBalances.bucket, value: sum(inventoryBalances.onHand) }).from(inventoryBalances).groupBy(inventoryBalances.bucket),
+      db.select({ id: products.id, name: products.name }).from(products).where(eq(products.active, true)),
+      db.select({ productId: shopifyMappings.productId }).from(shopifyMappings),
+      db.select({ productId: inventoryBalances.productId, bucket: inventoryBalances.bucket, onHand: inventoryBalances.onHand }).from(inventoryBalances),
     ]);
-    const stock = new Map(bucketRows.map((row) => [row.bucket, Number(row.value ?? 0)]));
+    const physicalProductIds = new Set(productRows.filter((product) => isPhysicalUnitProduct(product.name)).map((product) => product.id));
+    const physicalBalances = balanceRows.filter((row) => physicalProductIds.has(row.productId));
+    const stock = new Map<string, number>();
+    for (const row of physicalBalances) stock.set(row.bucket, (stock.get(row.bucket) ?? 0) + row.onHand);
     const onlineAllocation = stock.get("online") ?? 0;
     const retailStock = stock.get("retail") ?? 0;
     const bufferStock = stock.get("buffer") ?? 0;
     const qcStock = stock.get("qc") ?? 0;
     const damagedStock = stock.get("damaged") ?? 0;
-    return { configured: true, initialized: true, products: productCount.value, mappings: mappingCount.value, balances: balanceCount.value, transactions: transactionCount.value, pendingShopifyUpdates: pendingCount.value, failedShopifyWebhooks: failedWebhookCount.value, onlineAllocation, retailStock, bufferStock, physicalStock: onlineAllocation + retailStock + bufferStock + qcStock, damagedStock, error: null };
+    return { configured: true, initialized: true, products: physicalProductIds.size, mappings: mappingRows.filter((mapping) => physicalProductIds.has(mapping.productId)).length, balances: physicalBalances.length, transactions: transactionCount.value, pendingShopifyUpdates: pendingCount.value, failedShopifyWebhooks: failedWebhookCount.value, onlineAllocation, retailStock, bufferStock, physicalStock: onlineAllocation + retailStock + bufferStock + qcStock, damagedStock, error: null };
   } catch (error) {
     return { configured: true, initialized: false, ...empty, error: error instanceof Error ? error.message : "The warehouse database could not be reached." };
   }

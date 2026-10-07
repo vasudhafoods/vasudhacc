@@ -3,6 +3,7 @@ import { readRecentInventorySnapshots, toKolkataDateKey } from "@/services/inven
 import { readOperationsSettings } from "@/services/operations-store";
 import type { CurrentInventoryResult } from "@/types/shopify";
 import type { InventoryInsight } from "@/types/operations";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 
 function key(item: { inventoryItemId: string; locationId: string }) {
   return `${item.inventoryItemId}::${item.locationId}`;
@@ -10,9 +11,9 @@ function key(item: { inventoryItemId: string; locationId: string }) {
 
 export async function buildInventoryInsights(current: CurrentInventoryResult): Promise<InventoryInsight[]> {
   const [snapshots, settings] = await Promise.all([readRecentInventorySnapshots(60), readOperationsSettings()]);
-  const dated = snapshots.map((snapshot) => ({ date: snapshot.snapshotDate, items: new Map(snapshot.inventory.items.map((item) => [key(item), item.available])) }));
+  const dated = snapshots.map((snapshot) => ({ date: snapshot.snapshotDate, items: new Map(snapshot.inventory.items.filter(item => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`)).map((item) => [key(item), item.available])) }));
 
-  return current.items.map((item) => {
+  return current.items.filter(item => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`)).map((item) => {
     const itemKey = key(item);
     const series = dated.map((snapshot) => ({ date: snapshot.date, value: snapshot.items.get(itemKey) ?? 0 }));
     const currentDate = toKolkataDateKey(new Date(current.capturedAt));

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { inventoryBalances, products, warehouseLocations } from "@/db/schema";
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
+import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export async function GET() {
       db.select({ id: warehouseLocations.id, name: warehouseLocations.name }).from(warehouseLocations).where(eq(warehouseLocations.active, true)).orderBy(warehouseLocations.name),
       db.select({ productId: inventoryBalances.productId, warehouseLocationId: inventoryBalances.warehouseLocationId, bucket: inventoryBalances.bucket, onHand: inventoryBalances.onHand, reserved: inventoryBalances.reserved }).from(inventoryBalances),
     ]);
-    return Response.json({ products: catalog, locations, balances, refreshedAt: new Date().toISOString() }, { headers: { "Cache-Control": "private, no-store" } });
+    return Response.json({ products: catalog.filter(product => isPhysicalUnitProduct(product.name)).map(product => ({ ...product, name: physicalUnitDisplayName(product.name) })), locations, balances, refreshedAt: new Date().toISOString() }, { headers: { "Cache-Control": "private, no-store" } });
   } catch {
     return Response.json({ error: "Inventory could not be loaded. Please retry." }, { status: 503 });
   }

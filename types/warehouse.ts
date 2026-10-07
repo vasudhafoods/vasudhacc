@@ -37,7 +37,7 @@ export interface WarehouseLocationOption {
 
 export interface WarehouseActivity {
   id: string;
-  kind: "stock_received" | "retail_dispatched" | "return_received" | "qc_released" | "stock_disposed" | "product_created";
+  kind: "stock_received" | "retail_dispatched" | "stock_transferred" | "return_received" | "qc_released" | "stock_disposed" | "product_created";
   title: string;
   reference: string;
   occurredAt: string;

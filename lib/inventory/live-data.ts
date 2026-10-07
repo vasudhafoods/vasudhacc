@@ -6,6 +6,7 @@ import type { DailyTotal, InventoryComparison } from "@/types/inventory";
 import type { InventorySnapshotDocument } from "@/types/inventory-snapshot";
 import type { CurrentInventoryItem, CurrentInventoryResult } from "@/types/shopify";
 import { readOperationsSettings } from "@/services/operations-store";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 
 export interface InventoryFeed {
   source: "live" | "error";
@@ -95,8 +96,12 @@ function itemKey(item: Pick<CurrentInventoryItem, "inventoryItemId" | "locationI
   return `${item.inventoryItemId}::${item.locationId}`;
 }
 
+function physicalUnitItems(items: CurrentInventoryItem[]): CurrentInventoryItem[] {
+  return items.filter((item) => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`));
+}
+
 function itemMap(items: CurrentInventoryItem[]): Map<string, CurrentInventoryItem> {
-  return new Map(items.map((item) => [itemKey(item), item]));
+  return new Map(physicalUnitItems(items).map((item) => [itemKey(item), item]));
 }
 
 function buildLiveComparison(
@@ -153,9 +158,9 @@ function buildLiveDailyTotals(
   yesterdaySnapshot: InventorySnapshotDocument | null,
 ): DailyTotal[] {
   const totals: DailyTotal[] = [];
-  if (dayBeforeSnapshot) totals.push({ label: "Day before", date: dayBeforeSnapshot.snapshotDate, inventory: dayBeforeSnapshot.inventory.summary.totalInventory });
-  if (yesterdaySnapshot) totals.push({ label: "Yesterday", date: yesterdaySnapshot.snapshotDate, inventory: yesterdaySnapshot.inventory.summary.totalInventory });
-  totals.push({ label: "Today (live)", date: formatKolkataDateKey(new Date(current.capturedAt)), inventory: current.summary.totalInventory });
+  if (dayBeforeSnapshot) totals.push({ label: "Day before", date: dayBeforeSnapshot.snapshotDate, inventory: physicalUnitItems(dayBeforeSnapshot.inventory.items).reduce((sum, item) => sum + item.available, 0) });
+  if (yesterdaySnapshot) totals.push({ label: "Yesterday", date: yesterdaySnapshot.snapshotDate, inventory: physicalUnitItems(yesterdaySnapshot.inventory.items).reduce((sum, item) => sum + item.available, 0) });
+  totals.push({ label: "Today (live)", date: formatKolkataDateKey(new Date(current.capturedAt)), inventory: physicalUnitItems(current.items).reduce((sum, item) => sum + item.available, 0) });
   return totals;
 }
 
@@ -232,8 +237,8 @@ export async function getInventoryFeed(): Promise<InventoryFeed> {
           yesterday: history.availableSnapshots >= 2,
         },
         dailyTotals: history.dailyTotals,
-        items: history.items.map((item) => compareInventory({ ...item, lowStockThreshold: settings.productThresholds[item.productId] ?? settings.defaultLowStockThreshold })),
-        summary: buildSummary(history.items.map((item) => compareInventory({ ...item, lowStockThreshold: settings.productThresholds[item.productId] ?? settings.defaultLowStockThreshold }))),
+        items: history.items.filter((item) => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`)).map((item) => compareInventory({ ...item, lowStockThreshold: settings.productThresholds[item.productId] ?? settings.defaultLowStockThreshold })),
+        summary: buildSummary(history.items.filter((item) => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`)).map((item) => compareInventory({ ...item, lowStockThreshold: settings.productThresholds[item.productId] ?? settings.defaultLowStockThreshold }))),
         errorMessage: null,
       };
     }

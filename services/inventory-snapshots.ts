@@ -9,6 +9,7 @@ import type {
   InventorySnapshotDescriptor,
   InventorySnapshotDocument,
 } from "@/types/inventory-snapshot";
+import { isPhysicalUnitProduct } from "@/lib/inventory/physical-units";
 
 const KOLKATA_TIME_ZONE = "Asia/Kolkata";
 const MAX_HISTORY_SNAPSHOTS = 3;
@@ -32,12 +33,28 @@ function buildSnapshotPath(snapshotDate: string): string {
   return `${SNAPSHOT_PREFIX}/${snapshotDate}.json`;
 }
 
+function physicalUnitItems(inventory: CurrentInventoryResult): CurrentInventoryItem[] {
+  return inventory.items.filter((item) => isPhysicalUnitProduct(`${item.productTitle} ${item.variantTitle}`));
+}
+
 function buildSnapshotDocument(inventory: CurrentInventoryResult, snapshotDate: string): InventorySnapshotDocument {
+  const items = physicalUnitItems(inventory);
   return {
     schemaVersion: 1,
     snapshotDate,
     capturedAt: inventory.capturedAt,
-    inventory,
+    inventory: {
+      ...inventory,
+      items,
+      summary: {
+        ...inventory.summary,
+        totalInventory: items.reduce((sum, item) => sum + item.available, 0),
+        totalProducts: new Set(items.map((item) => item.productId)).size,
+        totalVariants: new Set(items.map((item) => item.variantId)).size,
+        totalInventoryItems: new Set(items.map((item) => item.inventoryItemId)).size,
+        totalLocations: new Set(items.map((item) => item.locationId)).size,
+      },
+    },
   };
 }
 
@@ -107,7 +124,7 @@ function alignSnapshotsForComparison(snapshots: InventorySnapshotDocument[]) {
 
   snapshots.forEach((snapshot, index) => {
     const slotIndex = startIndex + index;
-    for (const item of snapshot.inventory.items) {
+    for (const item of physicalUnitItems(snapshot.inventory)) {
       const key = `${item.inventoryItemId}::${item.locationId}`;
       const existing = valuesByKey.get(key);
       if (existing) {
@@ -176,7 +193,7 @@ export async function readLatestInventoryHistory(): Promise<InventoryHistoryResu
     dailyTotals: snapshots.map((snapshot, index) => ({
       label: snapshotLabel(index, snapshots.length),
       date: snapshot.snapshotDate,
-      inventory: snapshot.inventory.summary.totalInventory,
+      inventory: physicalUnitItems(snapshot.inventory).reduce((sum, item) => sum + item.available, 0),
     })),
     items,
   };
