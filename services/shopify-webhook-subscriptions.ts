@@ -6,7 +6,7 @@ import {
 } from "@/lib/shopify/queries";
 
 const WEBHOOK_PATH = "/api/shopify/webhooks";
-const REQUIRED_TOPICS = ["FULFILLMENTS_CREATE", "REFUNDS_CREATE"] as const;
+const REQUIRED_TOPICS = ["ORDERS_CREATE", "ORDERS_CANCELLED", "FULFILLMENTS_CREATE", "REFUNDS_CREATE"] as const;
 
 interface WebhookSubscription {
   id: string;

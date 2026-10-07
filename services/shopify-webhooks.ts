@@ -15,7 +15,7 @@ import {
 } from "@/db/schema";
 import { getShopifyConfig } from "@/lib/validation/env";
 
-export const SHOPIFY_WEBHOOK_TOPICS = ["fulfillments/create", "refunds/create"] as const;
+export const SHOPIFY_WEBHOOK_TOPICS = ["orders/create", "orders/cancelled", "fulfillments/create", "refunds/create"] as const;
 export type ShopifyWebhookTopic = (typeof SHOPIFY_WEBHOOK_TOPICS)[number];
 
 interface ShopifyLineItem {
@@ -30,6 +30,12 @@ interface ShopifyFulfillmentPayload {
   order_id?: string | number;
   location_id?: string | number | null;
   line_items?: ShopifyLineItem[];
+}
+
+interface ShopifyOrderPayload {
+  id?: string | number;
+  line_items?: (ShopifyLineItem & { id?: string | number })[];
+  fulfillments?: { line_items?: { id?: string | number; quantity?: number }[] }[];
 }
 
 interface ShopifyRefundLineItem {
@@ -119,17 +125,32 @@ function extractMovements(topic: ShopifyWebhookTopic, payload: unknown): {
     const fulfillment = payload as ShopifyFulfillmentPayload;
     const externalId = resourceId(fulfillment.id, "fulfillment id");
     const orderId = resourceId(fulfillment.order_id, "order id");
-    const fallbackLocation = fulfillment.location_id == null ? null : gid("Location", resourceId(fulfillment.location_id, "location id"));
-    const lines = (fulfillment.line_items ?? []).flatMap((line): RawMovement[] => {
+    return { externalId, orderId, direction: "out", lines: [] };
+  }
+
+  if (topic === "orders/create" || topic === "orders/cancelled") {
+    const order = payload as ShopifyOrderPayload;
+    const orderId = resourceId(order.id, "order id");
+    const cancelled = topic === "orders/cancelled";
+    const fulfilledByLine = new Map<string, number>();
+    if (cancelled) for (const fulfillment of order.fulfillments ?? []) for (const line of fulfillment.line_items ?? []) {
+      if (line.id == null) continue;
+      const key = String(line.id);
+      fulfilledByLine.set(key, (fulfilledByLine.get(key) ?? 0) + (Number.isSafeInteger(line.quantity) ? Number(line.quantity) : 0));
+    }
+    const lines = (order.line_items ?? []).flatMap((line): RawMovement[] => {
       if (line.gift_card || line.variant_id == null) return [];
+      const orderedQuantity = quantity(line.quantity);
+      const movementQuantity = cancelled ? Math.max(0, orderedQuantity - (line.id == null ? 0 : fulfilledByLine.get(String(line.id)) ?? 0)) : orderedQuantity;
+      if (!movementQuantity) return [];
       return [{
         variantId: gid("ProductVariant", resourceId(line.variant_id, "variant id")),
-        shopifyLocationId: fallbackLocation,
-        variantQuantity: quantity(line.quantity),
+        shopifyLocationId: null,
+        variantQuantity: movementQuantity,
         sku: line.sku?.trim() || null,
       }];
     });
-    return { externalId, orderId, direction: "out", lines };
+    return { externalId: orderId, orderId, direction: cancelled ? "in" : "out", lines };
   }
 
   const refund = payload as ShopifyRefundPayload;
@@ -274,7 +295,11 @@ async function applyInventoryMovement(
 ): Promise<ShopifyWebhookResult> {
   if (!movements.length) return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
   const db = getDatabase();
-  const idempotencyKey = `shopify-${direction === "out" ? "fulfillment" : "refund"}:${externalId}`;
+  const idempotencyKey = topic === "orders/create"
+    ? `shopify-order:create:${orderId}`
+    : topic === "orders/cancelled"
+      ? `shopify-order:cancel:${orderId}`
+      : `shopify-${direction === "out" ? "fulfillment" : "refund"}:${externalId}`;
   const [existing] = await db.select({ id: inventoryTransactions.id, transactionNumber: inventoryTransactions.transactionNumber })
     .from(inventoryTransactions).where(eq(inventoryTransactions.idempotencyKey, idempotencyKey)).limit(1);
   if (existing) {
@@ -282,7 +307,7 @@ async function applyInventoryMovement(
   }
 
   return db.transaction(async (tx) => {
-    const targetBucket = direction === "out" ? "online" as const : "qc" as const;
+    const targetBucket = topic === "orders/cancelled" ? "online" as const : direction === "out" ? "online" as const : "qc" as const;
     await tx.insert(inventoryBalances).values(movements.map((movement) => ({
       productId: movement.productId,
       warehouseLocationId: movement.warehouseLocationId,
@@ -309,12 +334,12 @@ async function applyInventoryMovement(
     const totalPackets = movements.reduce((sum, movement) => sum + movement.packetQuantity, 0);
     const [transaction] = await tx.insert(inventoryTransactions).values({
       transactionNumber,
-      type: direction === "out" ? "shopify_sale" : "return",
+      type: direction === "out" ? "shopify_sale" : topic === "orders/cancelled" ? "shopify_reconciliation" : "return",
       idempotencyKey,
       referenceId: externalId,
       shopifyOrderId: gid("Order", orderId),
       actorUsername: "shopify-webhook",
-      reason: direction === "out" ? "Shopify fulfillment shipped" : "Shopify returned items received into QC",
+      reason: topic === "orders/create" ? "Shopify order received; Online stock committed" : topic === "orders/cancelled" ? "Shopify order cancelled; unfulfilled Online stock restored" : direction === "out" ? "Shopify fulfillment shipped" : "Shopify returned items received into QC",
       metadata: { topic, externalId, totalPackets, unit: "individual_packet", targetBucket, movements },
     }).returning({ id: inventoryTransactions.id });
 
@@ -363,7 +388,7 @@ async function applyInventoryMovement(
     }
     await tx.insert(auditEvents).values({
       actorUsername: "shopify-webhook",
-      action: direction === "out" ? "inventory.shopify_fulfilled" : "inventory.shopify_return_quarantined",
+      action: topic === "orders/create" ? "inventory.shopify_order_received" : topic === "orders/cancelled" ? "inventory.shopify_order_cancelled" : direction === "out" ? "inventory.shopify_fulfilled" : "inventory.shopify_return_quarantined",
       entityType: "inventory_transaction",
       entityId: transaction.id,
       previousValue,
@@ -415,6 +440,32 @@ export async function processShopifyWebhook(input: {
 
   try {
     const extracted = extractMovements(input.topic, input.payload);
+    if (input.topic === "orders/cancelled") {
+      const [orderReceipt] = await db.select({ id: inventoryTransactions.id }).from(inventoryTransactions)
+        .where(eq(inventoryTransactions.idempotencyKey, `shopify-order:create:${extracted.orderId}`)).limit(1);
+      if (!orderReceipt) {
+        await db.insert(inventoryTransactions).values({
+          transactionNumber: `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`,
+          type: "shopify_reconciliation",
+          idempotencyKey: `shopify-order:cancel:${extracted.orderId}`,
+          referenceId: extracted.orderId,
+          shopifyOrderId: gid("Order", extracted.orderId),
+          actorUsername: "shopify-webhook",
+          reason: "Shopify order cancelled before inventory receipt was recorded",
+          metadata: { topic: input.topic, cancelledBeforeReceipt: true },
+        }).onConflictDoNothing({ target: inventoryTransactions.idempotencyKey });
+        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null }).where(eq(shopifyWebhookEvents.id, event.id));
+        return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
+      }
+    }
+    if (input.topic === "orders/create") {
+      const [cancellation] = await db.select({ id: inventoryTransactions.id }).from(inventoryTransactions)
+        .where(eq(inventoryTransactions.idempotencyKey, `shopify-order:cancel:${extracted.orderId}`)).limit(1);
+      if (cancellation) {
+        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null }).where(eq(shopifyWebhookEvents.id, event.id));
+        return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
+      }
+    }
     const movements = await resolveMovements(extracted.lines);
     const result = await applyInventoryMovement(input.topic, extracted.externalId, extracted.orderId, extracted.direction, movements);
     await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null })

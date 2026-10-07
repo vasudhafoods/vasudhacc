@@ -506,7 +506,7 @@ export function WarehouseWorkspace({ user, initialData }: {
       const baseName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+\d+\b.*$/i, "").trim() || product.name;
       const key = baseName.toLocaleLowerCase();
       const row = grouped.get(key) ?? { name: baseName, category: product.category, total: 0 };
-      row.total += initialData.balances.filter((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id).reduce((sum, balance) => sum + balance.onHand, 0);
+      row.total += initialData.balances.filter((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id).reduce((sum, balance) => sum + balance.available, 0);
       grouped.set(key, row);
     }
     return [...grouped.values()].filter((row) => row.total > 0 || initialData.locations.length === 1).map((row) => ({ ...row, locationName: location.name }));
