@@ -500,6 +500,17 @@ export function WarehouseWorkspace({ user, initialData }: {
   }
 
   const inputClass = "h-12 w-full rounded-xl border border-slate-300 bg-white px-3.5 text-base text-slate-900 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
+  const stockDashboardRows = initialData.locations.flatMap((location) => {
+    const grouped = new Map<string, { name: string; category: string; total: number }>();
+    for (const product of initialData.products) {
+      const baseName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+\d+\b.*$/i, "").trim() || product.name;
+      const key = baseName.toLocaleLowerCase();
+      const row = grouped.get(key) ?? { name: baseName, category: product.category, total: 0 };
+      row.total += initialData.balances.filter((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id).reduce((sum, balance) => sum + balance.onHand, 0);
+      grouped.set(key, row);
+    }
+    return [...grouped.values()].filter((row) => row.total > 0 || initialData.locations.length === 1).map((row) => ({ ...row, locationName: location.name }));
+  });
   return <div className="space-y-6 pb-12">
     <section className="rounded-2xl bg-[#174f40] px-5 py-6 text-white shadow-sm sm:px-7">
       <p className="text-xs font-semibold uppercase tracking-[.16em] text-emerald-200">Warehouse desk</p>
@@ -527,23 +538,9 @@ export function WarehouseWorkspace({ user, initialData }: {
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">View only</p><h2 className="mt-1 text-xl font-bold text-slate-950">Stock dashboard</h2><p className="mt-1 text-sm text-slate-500">Current inventory by product and warehouse. Stock changes are made through Receive stock or Deliver stock.</p></div>
       <div className="space-y-6 p-5 sm:p-7">
         <button type="button" onClick={() => changePanel("orders")} className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50/60 p-4 text-left hover:bg-blue-50"><span><span className="block font-bold text-slate-900">Sales orders to prepare</span><span className="mt-1 block text-xs text-slate-600">Open the Orders page to track Shopify and Retail orders.</span></span><span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{initialData.salesOrders.filter((order) => !["delivered", "cancelled"].includes(order.deliveryStatus)).length} active →</span></button>
-        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[1250px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Category / product</th><th className="px-4 py-3">Warehouse</th><th className="px-4 py-3 text-right">Shopify</th><th className="px-4 py-3 text-right">Retail</th><th className="px-4 py-3 text-right">Buffer</th><th className="px-4 py-3 text-right">Damaged</th><th className="px-4 py-3 text-right">QC / hold</th><th className="px-4 py-3 text-right">Total units</th><th className="px-4 py-3 text-right">Stock value</th><th className="px-4 py-3">Expiry / batch</th></tr></thead><tbody>
-          {initialData.products.flatMap((product) => initialData.locations.map((location) => {
-            const get = (bucket: WarehouseInventoryBucket) => initialData.balances.find((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id && balance.bucket === bucket)?.onHand ?? 0;
-            const online = get("online");
-            const retail = get("retail");
-            const buffer = get("buffer");
-            const damaged = get("damaged");
-            const qc = get("qc");
-            const total = online + retail + buffer + damaged + qc;
-            if (total === 0 && initialData.locations.length > 1) return null;
-            const batches = initialData.expiries.filter((batch) => batch.productId === product.id && batch.warehouseLocationId === location.id);
-            const earliest = batches[0];
-            const daysUntilExpiry = earliest ? Math.ceil((new Date(earliest.expiryDate).getTime() - Date.now()) / 86_400_000) : null;
-            const expiryWarning = daysUntilExpiry !== null && daysUntilExpiry <= 60;
-            return <tr key={`${product.id}-${location.id}`} className="border-t border-slate-100"><td className="px-4 py-3"><span className="block font-semibold text-slate-900">{product.name}</span><span className="text-xs text-slate-500">{product.category.toUpperCase()} · {product.sku}</span></td><td className="px-4 py-3 text-slate-600">{location.name}</td><td className="px-4 py-3 text-right">{online}</td><td className="px-4 py-3 text-right">{retail}</td><td className="px-4 py-3 text-right">{buffer}</td><td className="px-4 py-3 text-right">{damaged}</td><td className="px-4 py-3 text-right">{qc}</td><td className="px-4 py-3 text-right font-semibold">{total}</td><td className="px-4 py-3 text-right">₹{((product.unitPricePaisa * total) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</td><td className="px-4 py-3">{earliest ? <><span className={`block font-semibold ${expiryWarning ? "text-amber-800" : "text-slate-800"}`}>{new Date(earliest.expiryDate).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })}{expiryWarning ? " · Alert" : ""}</span><span className="text-xs text-slate-500">Batch {earliest.batchNumber} · {earliest.remainingQuantity} units{daysUntilExpiry !== null && daysUntilExpiry < 0 ? " · Expired" : ""}</span></> : <span className="text-slate-400">No expiry recorded</span>}</td></tr>;
-          }))}
-          {!initialData.products.length ? <tr><td className="px-4 py-10 text-center text-slate-500" colSpan={10}>No active products yet.</td></tr> : null}
+        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[520px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Warehouse</th><th className="px-4 py-3 text-right">Units</th></tr></thead><tbody>
+          {stockDashboardRows.map((row) => <tr key={`${row.name}-${row.locationName}`} className="border-t border-slate-100"><td className="px-4 py-3"><span className="block font-semibold text-slate-900">{row.name}</span><span className="text-xs capitalize text-slate-500">{row.category}</span></td><td className="px-4 py-3 text-slate-600">{row.locationName}</td><td className="px-4 py-3 text-right text-lg font-bold tabular-nums text-slate-950">{row.total}</td></tr>)}
+          {!initialData.products.length ? <tr><td className="px-4 py-10 text-center text-slate-500" colSpan={3}>No active products yet.</td></tr> : null}
         </tbody></table></div>
       </div>
     </section> : null}
