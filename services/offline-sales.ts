@@ -203,7 +203,7 @@ export async function createOfflineSale(input: {
   lines: { productId: string; productName: string; sku: string; quantity: number; unitPricePaisa: number; gstRateBps: number; discountPaisa: number }[];
   actorUsername: string;
   idempotencyKey: string;
-}): Promise<{ sale: OfflineSaleRow; duplicate: boolean }> {
+}): Promise<{ sale: OfflineSaleRow; duplicate: boolean; stockTransferTransactionId: string | null; stockTransfers: { productId: string; movedFromBuffer: number; movedFromOnline: number }[] }> {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new OfflineSalesError("INVALID_SALE", "A valid submission key is required. Please try again.");
   const date = saleDate(input.saleDate);
   const billingInvoiceNumber = text(input.billingInvoiceNumber, "Billing invoice number", 2, 100, true)!;
