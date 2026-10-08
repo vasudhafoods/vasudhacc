@@ -8,9 +8,86 @@ import { fetchShopifyPricesBySku } from "@/services/shopify-inventory";
 import { listedOfflineUnitPricePaisa } from "@/lib/offline-product-pricing";
 import { calculateInvoice } from "@/lib/sales/invoice-calc";
 import { isPhysicalUnitProduct, physicalUnitDisplayName } from "@/lib/inventory/physical-units";
+import { targetChannelBalances } from "@/lib/inventory/stock-rotation";
 import type { OfflineCustomerType, OfflinePaymentStatus, OfflineSaleRow, OfflineSalesEntryData, OfflineSalesOverview, SalesCustomer } from "@/types/offline-sales";
 
 const MAX_AMOUNT_PAISA = 1_000_000_000;
+type DatabaseTransaction = Parameters<Parameters<ReturnType<typeof getDatabase>["transaction"]>[0]>[0];
+
+export async function rebalanceOfflineStock(tx: DatabaseTransaction, input: { productIds: string[]; warehouseLocationId: string; actorUsername: string; idempotencyKey: string; reason: string; referenceId: string }) {
+  const productIds = [...new Set(input.productIds)];
+  if (!productIds.length) return null;
+  const buckets = ["online", "retail", "buffer"] as const;
+  await tx.insert(inventoryBalances).values(productIds.flatMap((productId) => buckets.map((bucket) => ({ productId, warehouseLocationId: input.warehouseLocationId, bucket }))))
+    .onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
+  const balances = await tx.select().from(inventoryBalances).where(and(
+    inArray(inventoryBalances.productId, productIds),
+    eq(inventoryBalances.warehouseLocationId, input.warehouseLocationId),
+    inArray(inventoryBalances.bucket, [...buckets]),
+  )).orderBy(inventoryBalances.productId, inventoryBalances.bucket).for("update");
+  const grouped = new Map<string, typeof balances>();
+  for (const balance of balances) grouped.set(balance.productId, [...(grouped.get(balance.productId) ?? []), balance]);
+  const plans = [...grouped].flatMap(([productId, rows]) => {
+    const target = targetChannelBalances(rows.map(({ bucket, onHand, reserved }) => ({ bucket: bucket as "online" | "retail" | "buffer", onHand, reserved })));
+    const byBucket = new Map(rows.map((row) => [row.bucket, row]));
+    return buckets.some((bucket) => target[bucket] !== (byBucket.get(bucket)?.onHand ?? 0))
+      ? [{ productId, rows, target, byBucket }]
+      : [];
+  });
+  if (!plans.length) return null;
+
+  const transactionNumber = `TX-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  const [transaction] = await tx.insert(inventoryTransactions).values({
+    transactionNumber,
+    type: "channel_transfer",
+    idempotencyKey: input.idempotencyKey,
+    referenceId: input.referenceId,
+    actorUsername: input.actorUsername,
+    reason: input.reason,
+    metadata: { action: "automatic_stock_rotation", policy: "40/40/20", unit: "individual_packet" },
+  }).returning({ id: inventoryTransactions.id });
+  const lines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
+  const previousValue: Record<string, number> = {};
+  const newValue: Record<string, number> = {};
+  for (const plan of plans) for (const bucket of buckets) {
+    const balance = plan.byBucket.get(bucket)!;
+    const closingBalance = plan.target[bucket];
+    if (closingBalance === balance.onHand) continue;
+    await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+    lines.push({ transactionId: transaction.id, productId: plan.productId, warehouseLocationId: input.warehouseLocationId, bucket, quantityDelta: closingBalance - balance.onHand, openingBalance: balance.onHand, closingBalance });
+    previousValue[`${plan.productId}:${bucket}`] = balance.onHand;
+    newValue[`${plan.productId}:${bucket}`] = closingBalance;
+  }
+  if (lines.length) await tx.insert(inventoryTransactionLines).values(lines);
+
+  const changedOnline = plans.filter((plan) => plan.target.online !== (plan.byBucket.get("online")?.onHand ?? 0));
+  if (changedOnline.length) {
+    const mappings = await tx.select().from(shopifyMappings).where(and(inArray(shopifyMappings.productId, changedOnline.map((plan) => plan.productId)), eq(shopifyMappings.status, "mapped")));
+    const mappingByProduct = new Map<string, typeof shopifyMappings.$inferSelect>();
+    for (const mapping of mappings) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping);
+    const targets = changedOnline.flatMap((plan) => {
+      const mapping = mappingByProduct.get(plan.productId);
+      return mapping ? [{ plan, mapping }] : [];
+    });
+    if (targets.length) {
+      const itemIds = new Set(targets.map(({ mapping }) => mapping.shopifyInventoryItemId));
+      const pending = await tx.select({ id: integrationOutbox.id, payload: integrationOutbox.payload }).from(integrationOutbox).where(and(
+        eq(integrationOutbox.operation, "shopify_inventory_adjust"),
+        inArray(integrationOutbox.status, ["pending", "failed"]),
+      ));
+      const superseded = pending.filter((job) => typeof job.payload.shopifyInventoryItemId === "string" && itemIds.has(job.payload.shopifyInventoryItemId)).map((job) => job.id);
+      if (superseded.length) await tx.update(integrationOutbox).set({ status: "cancelled", lockedAt: null, completedAt: new Date(), lastError: "Superseded by automatic 40/40/20 stock rotation.", updatedAt: new Date() }).where(inArray(integrationOutbox.id, superseded));
+      await tx.insert(integrationOutbox).values(targets.map(({ plan, mapping }, index) => ({
+        transactionId: transaction.id,
+        operation: "shopify_inventory_adjust",
+        idempotencyKey: `${input.idempotencyKey}:shopify:${index}`,
+        payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantity: plan.target.online, reason: "correction" },
+      })));
+    }
+  }
+  await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.stock_rotated", entityType: "inventory_transaction", entityId: transaction.id, previousValue, newValue, reason: input.reason });
+  return transaction.id;
+}
 
 export class OfflineSalesError extends Error {
   constructor(readonly code: "INVALID_SALE" | "INVALID_COLLECTION" | "NOT_FOUND", message: string) {
@@ -289,10 +366,18 @@ export async function createOfflineSale(input: {
       const movedFromOnline = Math.min(shortfall, Math.max(0, online.onHand - online.reserved));
       shortfall -= movedFromOnline;
       if (shortfall > 0) throw new OfflineSalesError("INVALID_SALE", `${line.productName} has only ${retailAvailable + Math.max(0, buffer.onHand - buffer.reserved) + Math.max(0, online.onHand - online.reserved)} available physical units across Retail, Buffer, and Online at the selected warehouse.`);
-      return { line, retail, buffer, online, movedFromBuffer, movedFromOnline };
+      const afterBuffer = buffer.onHand - movedFromBuffer;
+      const afterOnline = online.onHand - movedFromOnline;
+      const afterRetail = retail.onHand + movedFromBuffer + movedFromOnline;
+      const rotation = targetChannelBalances([
+        { bucket: "online", onHand: afterOnline, reserved: online.reserved },
+        { bucket: "retail", onHand: afterRetail, reserved: retail.reserved + line.quantity },
+        { bucket: "buffer", onHand: afterBuffer, reserved: buffer.reserved },
+      ]);
+      return { line, retail, buffer, online, movedFromBuffer, movedFromOnline, rotation };
     });
     const onlinePlans = stockPlans.filter((plan) => plan.movedFromOnline > 0);
-    const mappings = onlinePlans.length ? await tx.select().from(shopifyMappings).where(and(inArray(shopifyMappings.productId, [...new Set(onlinePlans.map((plan) => plan.line.productId))]), eq(shopifyMappings.status, "mapped"))) : [];
+    const mappings = await tx.select().from(shopifyMappings).where(and(inArray(shopifyMappings.productId, [...new Set(stockPlans.map((plan) => plan.line.productId))]), eq(shopifyMappings.status, "mapped")));
     const mappingByProduct = new Map<string, typeof shopifyMappings.$inferSelect>();
     for (const mapping of mappings) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping);
     for (const plan of onlinePlans) if (!mappingByProduct.has(plan.line.productId)) throw new OfflineSalesError("INVALID_SALE", `${plan.line.productName} has Online units but no verified Shopify mapping. Reconcile its listing before moving those units to Retail.`);
@@ -329,7 +414,7 @@ export async function createOfflineSale(input: {
       createdBy: input.actorUsername,
     }).returning();
     const stockTransfers = stockPlans.map((plan) => ({ productId: plan.line.productId, movedFromBuffer: plan.movedFromBuffer, movedFromOnline: plan.movedFromOnline }));
-    const hasTransfers = stockPlans.some((plan) => plan.movedFromBuffer > 0 || plan.movedFromOnline > 0);
+    const hasTransfers = stockPlans.some((plan) => plan.movedFromBuffer > 0 || plan.movedFromOnline > 0 || plan.rotation.online !== plan.online.onHand || plan.rotation.retail !== plan.retail.onHand || plan.rotation.buffer !== plan.buffer.onHand);
     let stockTransferTransactionId: string | null = null;
     let transferLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
     const transferPrevious: Record<string, number> = {};
@@ -372,13 +457,34 @@ export async function createOfflineSale(input: {
         transferPrevious[`${line.productId}:retail`] = retail.onHand;
         transferNext[`${line.productId}:retail`] = retailClosing;
       }
+      const afterMove = {
+        online: online.onHand - movedFromOnline,
+        retail: retailClosing,
+        buffer: buffer.onHand - movedFromBuffer,
+      };
+      for (const bucket of ["online", "retail", "buffer"] as const) {
+        const balance = bucket === "online" ? online : bucket === "retail" ? retail : buffer;
+        const closing = plan.rotation[bucket];
+        const opening = afterMove[bucket];
+        if (closing === opening) continue;
+        await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+        transferLines.push({ transactionId: stockTransferTransactionId!, productId: line.productId, warehouseLocationId: input.warehouseLocationId, bucket, quantityDelta: closing - opening, openingBalance: opening, closingBalance: closing });
+        if (transferPrevious[`${line.productId}:${bucket}`] === undefined) transferPrevious[`${line.productId}:${bucket}`] = opening;
+        transferNext[`${line.productId}:${bucket}`] = closing;
+      }
     }
     if (hasTransfers) {
       if (transferLines.length) await tx.insert(inventoryTransactionLines).values(transferLines);
-      if (onlinePlans.length) await tx.insert(integrationOutbox).values(onlinePlans.map((plan, index) => {
-        const mapping = mappingByProduct.get(plan.line.productId)!;
-        return { transactionId: stockTransferTransactionId!, operation: "shopify_inventory_adjust", idempotencyKey: `${input.idempotencyKey}:retail-replenish:shopify:${index}`, payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantityDelta: -plan.movedFromOnline, reason: "correction" } };
-      }));
+      const onlineTargets = stockPlans.filter((plan) => plan.rotation.online !== plan.online.onHand).flatMap((plan) => {
+        const mapping = mappingByProduct.get(plan.line.productId);
+        return mapping ? [{ plan, mapping }] : [];
+      });
+      if (onlineTargets.length) await tx.insert(integrationOutbox).values(onlineTargets.map(({ plan, mapping }, index) => ({
+        transactionId: stockTransferTransactionId!,
+        operation: "shopify_inventory_adjust",
+        idempotencyKey: `${input.idempotencyKey}:retail-replenish:shopify:${index}`,
+        payload: { shopifyInventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, quantity: plan.rotation.online, reason: "correction" },
+      })));
       await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "inventory.channel_transfer", entityType: "inventory_transaction", entityId: stockTransferTransactionId!, previousValue: transferPrevious, newValue: transferNext, reason: "Individual units shifted into Retail to cover sales order demand." });
     }
     if (input.initialCollectionPaisa > 0) {
@@ -513,6 +619,7 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
     if (!sale) throw new OfflineSalesError("NOT_FOUND", "This sales order could not be found.");
     const previousStatus = sale.deliveryStatus;
     if (previousStatus === "delivered" || previousStatus === "cancelled") throw new OfflineSalesError("INVALID_SALE", `A ${previousStatus} order cannot be changed.`);
+    let stockRotationTransactionId: string | null = null;
     if (input.status === "cancelled") {
       if (["shipped", "out_for_delivery", "dispatched"].includes(previousStatus)) throw new OfflineSalesError("INVALID_SALE", "A shipped order cannot be cancelled. Record a return instead.");
       const lines = sale.lines.filter((line) => line.productId);
@@ -520,6 +627,14 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
         const [balance] = await tx.select().from(inventoryBalances).where(and(eq(inventoryBalances.productId, line.productId!), eq(inventoryBalances.warehouseLocationId, sale.warehouseLocationId!), eq(inventoryBalances.bucket, "retail"))).for("update").limit(1);
         if (balance) await tx.update(inventoryBalances).set({ reserved: sql`GREATEST(${inventoryBalances.reserved} - ${line.quantity}, 0)`, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
       }
+      stockRotationTransactionId = await rebalanceOfflineStock(tx, {
+        productIds: lines.flatMap((line) => line.productId ? [line.productId] : []),
+        warehouseLocationId: sale.warehouseLocationId ?? "",
+        actorUsername: input.actorUsername,
+        idempotencyKey: `offline-sale-cancel-rotation:${sale.id}`,
+        reason: "Cancelled sales order released its reservation; remaining free stock was rebalanced 40/40/20.",
+        referenceId: sale.billingInvoiceNumber ?? sale.saleNumber,
+      });
     } else if (previousStatus !== input.status) {
       const allowedNext: Record<string, string[]> = {
         packing: ["shipped", "out_for_delivery", "delivered"],
@@ -549,11 +664,19 @@ export async function updateOfflineSaleDeliveryStatus(input: { saleId: string; s
           txLines.push({ transactionId: transaction.id, productId: line.productId!, warehouseLocationId: sale.warehouseLocationId, bucket: "retail", quantityDelta: -line.quantity, openingBalance: balance.onHand, closingBalance: closing });
         }
         if (txLines.length) await tx.insert(inventoryTransactionLines).values(txLines);
+        stockRotationTransactionId = await rebalanceOfflineStock(tx, {
+          productIds: lines.flatMap((line) => line.productId ? [line.productId] : []),
+          warehouseLocationId: sale.warehouseLocationId,
+          actorUsername: input.actorUsername,
+          idempotencyKey: `offline-sale-dispatch-rotation:${sale.id}`,
+          reason: "Sales order dispatch consumed reserved units; remaining free stock was rebalanced 40/40/20.",
+          referenceId: sale.billingInvoiceNumber ?? sale.saleNumber,
+        });
       }
     }
     const updatedAt = new Date();
     await tx.update(offlineSales).set({ deliveryStatus: input.status, deliveredAt: input.status === "delivered" ? sale.deliveredAt ?? updatedAt : sale.deliveredAt, deliveryPartner: deliveryPartner || sale.deliveryPartner, lrNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl, updatedAt }).where(eq(offlineSales.id, sale.id));
     await tx.insert(auditEvents).values({ actorUsername: input.actorUsername, action: "offline_sale.delivery_status_updated", entityType: "offline_sale", entityId: sale.id, previousValue: { deliveryStatus: previousStatus, deliveryPartner: sale.deliveryPartner, lrNumber: sale.lrNumber, trackingUrl: sale.trackingUrl }, newValue: { deliveryStatus: input.status, deliveryPartner: deliveryPartner || sale.deliveryPartner, trackingNumber: trackingNumber || sale.lrNumber, trackingUrl: trackingUrl || sale.trackingUrl }, reason: input.status === "cancelled" ? "Sales order cancelled; reserved Retail stock released" : "Warehouse fulfillment status and tracking updated" });
-    return { saleNumber: sale.saleNumber, status: input.status, duplicate: false };
+    return { saleNumber: sale.saleNumber, status: input.status, duplicate: false, stockRotationTransactionId };
   });
 }

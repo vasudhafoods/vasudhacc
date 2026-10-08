@@ -86,13 +86,13 @@ async function executeSetQuantity(job: typeof integrationOutbox.$inferSelect): P
   const response = await shopifyGraphQL<InventoryAdjustmentResponse>(INVENTORY_SET_QUANTITIES_MUTATION, {
     input: {
       reason: "correction",
-      ignoreCompareQuantity: true,
+      name: "available",
       referenceDocumentUri: `gid://vasudha-command-center/InventoryTransaction/${job.transactionId}`,
       quantities: [{
         quantity: quantity.quantity,
         inventoryItemId: quantity.inventoryItemId,
         locationId: quantity.locationId,
-        name: "available",
+        changeFromQuantity: null,
       }],
     },
     idempotencyKey: remoteIdempotencyKey(job.id, job.payload),
@@ -214,7 +214,7 @@ async function transactionShopifySyncStatus(transactionId: string): Promise<Shop
 export async function attemptAutomaticShopifySync(transactionId: string, currentStatus: ShopifySyncStatus): Promise<ShopifySyncStatus> {
   if (currentStatus === "not_required" || currentStatus === "succeeded") return currentStatus;
   try {
-    await processShopifyOutbox({ force: true, limit: 10, transactionId });
+    await processShopifyOutbox({ force: true, limit: 50, transactionId });
     return await transactionShopifySyncStatus(transactionId);
   } catch (error) {
     console.error("Automatic Shopify inventory synchronization failed", {
@@ -223,4 +223,14 @@ export async function attemptAutomaticShopifySync(transactionId: string, current
     });
     return "pending";
   }
+}
+
+export async function attemptStockMovementShopifySync(
+  primaryTransactionId: string,
+  fallbackTransactionId: string,
+  currentStatus: ShopifySyncStatus,
+): Promise<ShopifySyncStatus> {
+  const primaryStatus = await attemptAutomaticShopifySync(primaryTransactionId, currentStatus);
+  if (primaryStatus !== "not_required" || primaryTransactionId === fallbackTransactionId) return primaryStatus;
+  return attemptAutomaticShopifySync(fallbackTransactionId, currentStatus);
 }

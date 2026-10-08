@@ -1,6 +1,6 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
 import { InventoryCommandError, transferInventory } from "@/services/inventory-ledger";
-import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
+import { attemptStockMovementShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +29,8 @@ export async function POST(request: Request) {
       shopifyMappingId: body.shopifyMappingId ? String(body.shopifyMappingId) : undefined,
       referenceId: body.referenceId ? String(body.referenceId) : undefined,
     });
-    const shopifySync = await attemptAutomaticShopifySync(result.transactionId, result.shopifySync);
+    const shopifyTransactionId = result.stockRotationTransactionId ?? result.transactionId;
+    const shopifySync = await attemptStockMovementShopifySync(shopifyTransactionId, result.transactionId, result.shopifySync);
     return Response.json({ ok: true, result: { ...result, shopifySync } }, { status: result.duplicate ? 200 : 201, headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof InventoryCommandError) {

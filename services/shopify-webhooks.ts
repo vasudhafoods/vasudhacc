@@ -14,6 +14,7 @@ import {
   warehouseLocations,
 } from "@/db/schema";
 import { getShopifyConfig } from "@/lib/validation/env";
+import { targetChannelBalances } from "@/lib/inventory/stock-rotation";
 
 export const SHOPIFY_WEBHOOK_TOPICS = ["orders/create", "orders/cancelled", "fulfillments/create", "refunds/create"] as const;
 export type ShopifyWebhookTopic = (typeof SHOPIFY_WEBHOOK_TOPICS)[number];
@@ -308,22 +309,26 @@ async function applyInventoryMovement(
 
   return db.transaction(async (tx) => {
     const targetBucket = topic === "orders/cancelled" ? "online" as const : direction === "out" ? "online" as const : "qc" as const;
+    const channelSale = topic === "orders/create" || topic === "orders/cancelled";
+    const stockBuckets = channelSale ? ["online", "retail", "buffer"] as const : [targetBucket] as const;
     await tx.insert(inventoryBalances).values(movements.map((movement) => ({
       productId: movement.productId,
       warehouseLocationId: movement.warehouseLocationId,
-      bucket: targetBucket,
+      bucket: stockBuckets[0],
     }))).onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
+    if (channelSale) await tx.insert(inventoryBalances).values(movements.flatMap((movement) => stockBuckets.slice(1).map((bucket) => ({ productId: movement.productId, warehouseLocationId: movement.warehouseLocationId, bucket }))))
+      .onConflictDoNothing({ target: [inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket] });
     const productIds = [...new Set(movements.map((movement) => movement.productId))];
     const warehouseIds = [...new Set(movements.map((movement) => movement.warehouseLocationId))];
     const balances = await tx.select().from(inventoryBalances).where(and(
       inArray(inventoryBalances.productId, productIds),
       inArray(inventoryBalances.warehouseLocationId, warehouseIds),
-      eq(inventoryBalances.bucket, targetBucket),
-    )).orderBy(inventoryBalances.productId, inventoryBalances.warehouseLocationId).for("update");
-    const balanceByScope = new Map(balances.map((balance) => [`${balance.productId}:${balance.warehouseLocationId}`, balance]));
+      inArray(inventoryBalances.bucket, [...stockBuckets]),
+    )).orderBy(inventoryBalances.productId, inventoryBalances.warehouseLocationId, inventoryBalances.bucket).for("update");
+    const balanceByScope = new Map(balances.map((balance) => [`${balance.productId}:${balance.warehouseLocationId}:${balance.bucket}`, balance]));
 
     for (const movement of movements) {
-      const balance = balanceByScope.get(`${movement.productId}:${movement.warehouseLocationId}`);
+      const balance = balanceByScope.get(`${movement.productId}:${movement.warehouseLocationId}:${targetBucket}`);
       if (!balance) throw new Error(`Online balance could not be created for ${movement.productName}.`);
       if (direction === "out" && balance.onHand - balance.reserved < movement.packetQuantity) {
         throw new Error(`${movement.productName} has only ${balance.onHand - balance.reserved} unreserved Online packets; Shopify shipped ${movement.packetQuantity}.`);
@@ -347,7 +352,7 @@ async function applyInventoryMovement(
     const previousValue: Record<string, number> = {};
     const newValue: Record<string, number> = {};
     for (const movement of movements) {
-      const balance = balanceByScope.get(`${movement.productId}:${movement.warehouseLocationId}`)!;
+      const balance = balanceByScope.get(`${movement.productId}:${movement.warehouseLocationId}:${targetBucket}`)!;
       const delta = direction === "out" ? -movement.packetQuantity : movement.packetQuantity;
       const closing = balance.onHand + delta;
       await tx.update(inventoryBalances).set({
@@ -368,7 +373,56 @@ async function applyInventoryMovement(
       previousValue[scope] = balance.onHand;
       newValue[scope] = closing;
     }
+    const rotationTargets = new Map<string, { movement: ResolvedMovement; target: ReturnType<typeof targetChannelBalances> }>();
+    if (channelSale) {
+      for (const movement of movements) {
+        const scope = `${movement.productId}:${movement.warehouseLocationId}`;
+        const rows = stockBuckets.map((bucket) => {
+          const balance = balanceByScope.get(`${scope}:${bucket}`)!;
+          const orderDelta = bucket === targetBucket ? (direction === "out" ? -movement.packetQuantity : movement.packetQuantity) : 0;
+          return { bucket: bucket as "online" | "retail" | "buffer", onHand: balance.onHand + orderDelta, reserved: balance.reserved };
+        });
+        rotationTargets.set(scope, { movement, target: targetChannelBalances(rows) });
+      }
+      for (const [scope, { movement, target }] of rotationTargets) {
+        for (const bucket of stockBuckets) {
+          const balance = balanceByScope.get(`${scope}:${bucket}`)!;
+          const afterOrder = balance.onHand + (bucket === targetBucket ? (direction === "out" ? -movement.packetQuantity : movement.packetQuantity) : 0);
+          const closing = target[bucket as "online" | "retail" | "buffer"];
+          if (closing === afterOrder) continue;
+          await tx.update(inventoryBalances).set({ onHand: closing, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance.id));
+          ledgerLines.push({ transactionId: transaction.id, productId: movement.productId, warehouseLocationId: movement.warehouseLocationId, bucket, quantityDelta: closing - afterOrder, openingBalance: afterOrder, closingBalance: closing });
+          const previousKey = `${scope}:${bucket}`;
+          previousValue[previousKey] ??= balance.onHand;
+          newValue[previousKey] = closing;
+        }
+      }
+    }
     await tx.insert(inventoryTransactionLines).values(ledgerLines);
+    if (channelSale) {
+      const baseMappings = await tx.select({ productId: shopifyMappings.productId, itemId: shopifyMappings.shopifyInventoryItemId, locationId: shopifyMappings.shopifyLocationId })
+        .from(shopifyMappings).where(and(inArray(shopifyMappings.productId, movements.map((movement) => movement.productId)), eq(shopifyMappings.status, "mapped")));
+      const mappingByProduct = new Map<string, typeof baseMappings[number]>();
+      for (const mapping of baseMappings) if (!mappingByProduct.has(mapping.productId)) mappingByProduct.set(mapping.productId, mapping);
+      const targets = [...rotationTargets.values()].flatMap(({ movement, target }) => {
+        const mapping = mappingByProduct.get(movement.productId);
+        const scope = `${movement.productId}:${movement.warehouseLocationId}`;
+        const oldOnline = balanceByScope.get(`${scope}:online`)?.onHand ?? 0;
+        return mapping && target.online !== oldOnline ? [{ mapping, quantity: target.online }] : [];
+      });
+      if (targets.length) {
+        const itemIds = new Set(targets.map(({ mapping }) => mapping.itemId));
+        const pendingJobs = await tx.select({ id: integrationOutbox.id, payload: integrationOutbox.payload }).from(integrationOutbox).where(and(eq(integrationOutbox.operation, "shopify_inventory_adjust"), inArray(integrationOutbox.status, ["pending", "failed"])));
+        const superseded = pendingJobs.filter((job) => typeof job.payload.shopifyInventoryItemId === "string" && itemIds.has(job.payload.shopifyInventoryItemId)).map((job) => job.id);
+        if (superseded.length) await tx.update(integrationOutbox).set({ status: "cancelled", lockedAt: null, completedAt: new Date(), lastError: "Superseded by an absolute Online quantity after Shopify order movement.", updatedAt: new Date() }).where(inArray(integrationOutbox.id, superseded));
+        await tx.insert(integrationOutbox).values(targets.map(({ mapping, quantity: targetQuantity }, index) => ({
+          transactionId: transaction.id,
+          operation: "shopify_inventory_adjust",
+          idempotencyKey: `${idempotencyKey}:online-target:${index}`,
+          payload: { shopifyInventoryItemId: mapping.itemId, shopifyLocationId: mapping.locationId, quantity: targetQuantity, reason: "correction" },
+        })));
+      }
+    }
     if (direction === "in") {
       const quarantine = new Map<string, { inventoryItemId: string; locationId: string; quantity: number }>();
       for (const movement of movements) {

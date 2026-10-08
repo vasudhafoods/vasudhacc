@@ -49,7 +49,7 @@ export async function POST(request: Request) {
       return json({ error: { code: "INVALID_JSON", message: "Webhook payload is not valid JSON." } }, 400);
     }
     const result = await processShopifyWebhook({ eventId, topic, payloadHash: shopifyPayloadHash(rawBody), payload });
-    const shopifySync = result.transactionId && topic === "refunds/create"
+    const shopifySync = result.transactionId && ["orders/create", "orders/cancelled", "refunds/create"].includes(topic)
       ? await attemptAutomaticShopifySync(result.transactionId, "pending")
       : "not_required";
     return json({ ok: true, ...result, shopifySync });

@@ -1,5 +1,6 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
 import { OfflineSalesError, updateOfflineSaleDeliveryStatus } from "@/services/offline-sales";
+import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ sa
     if (!["packing", "shipped", "out_for_delivery", "dispatched", "delivered", "cancelled"].includes(status)) return Response.json({ error: { message: "Choose a valid warehouse status." } }, { status: 400 });
     const { saleId } = await params;
     const result = await updateOfflineSaleDeliveryStatus({ saleId, status: status as "packing" | "shipped" | "out_for_delivery" | "dispatched" | "delivered" | "cancelled", deliveryPartner: typeof body.deliveryPartner === "string" ? body.deliveryPartner : undefined, trackingNumber: typeof body.trackingNumber === "string" ? body.trackingNumber : undefined, trackingUrl: typeof body.trackingUrl === "string" ? body.trackingUrl : undefined, actorUsername: session.username });
-    return Response.json({ ok: true, result }, { headers: { "Cache-Control": "private, no-store" } });
+    const shopifySync = result.stockRotationTransactionId
+      ? await attemptAutomaticShopifySync(result.stockRotationTransactionId, "pending")
+      : "not_required";
+    return Response.json({ ok: true, result: { ...result, shopifySync } }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof OfflineSalesError) return Response.json({ error: { message: error.message } }, { status: error.code === "NOT_FOUND" ? 404 : 400 });
     return Response.json({ error: { message: error instanceof Error ? error.message : "Warehouse order could not be updated." } }, { status: 500 });

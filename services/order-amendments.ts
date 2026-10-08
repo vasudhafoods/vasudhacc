@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { auditEvents, inventoryBalances, inventoryTransactions, offlineSaleCollections, offlineSaleDocuments, offlineSales, products } from "@/db/schema";
 import { amendmentTotals, reservationAfterCorrection, type AmendmentLine } from "@/lib/sales/order-amendment";
+import { rebalanceOfflineStock } from "@/services/offline-sales";
 
 export class OrderAmendmentError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }
@@ -86,6 +87,16 @@ export async function amendOrder(saleId: string, actor: Actor, body: Record<stri
       try { reserved = reservationAfterCorrection(balance!.onHand, balance!.reserved, oldQuantities.get(id) ?? 0, newQuantities.get(id) ?? 0); } catch (error) { return fail(error instanceof Error ? error.message : "Stock update failed."); }
       await tx.update(inventoryBalances).set({ reserved, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() }).where(eq(inventoryBalances.id, balance!.id));
     }
+    const stockRotationTransactionId = await rebalanceOfflineStock(tx, {
+      productIds: ids,
+      warehouseLocationId: sale.warehouseLocationId!,
+      actorUsername: actor.username,
+      idempotencyKey: `offline-sale-amendment-rotation:${sale.id}:${sale.updatedAt.toISOString()}`,
+      reason: action === "cancel"
+        ? "Cancelled sales order released its reservation; remaining free stock was rebalanced 40/40/20."
+        : "Sales order quantities changed; remaining free stock was rebalanced 40/40/20.",
+      referenceId: sale.billingInvoiceNumber ?? sale.saleNumber,
+    });
     const newDocuments = [...oldDocuments];
     if (action === "edit" && document) {
       const [saved] = await tx.insert(offlineSaleDocuments).values({ ...document, offlineSaleId: saleId, kind: "invoice", uploadedBy: actor.username }).returning({ id: offlineSaleDocuments.id, fileName: offlineSaleDocuments.fileName, createdAt: offlineSaleDocuments.createdAt });
@@ -93,6 +104,6 @@ export async function amendOrder(saleId: string, actor: Actor, body: Record<stri
     }
     const [updated] = await tx.update(offlineSales).set({ ...changes, updatedAt: new Date() }).where(eq(offlineSales.id, saleId)).returning();
     await tx.insert(auditEvents).values({ actorUsername: actor.username, action: action === "edit" ? actions[0] : actions[1], entityType: "offline_sale", entityId: saleId, reason, previousValue: snapshot({ ...sale, invoiceDocuments: oldDocuments, collectedAmountPaisa: collected }), newValue: snapshot({ ...updated, invoiceDocuments: newDocuments, collectedAmountPaisa: collected }) });
-    return { ok: true };
+    return { ok: true, stockRotationTransactionId };
   });
 }

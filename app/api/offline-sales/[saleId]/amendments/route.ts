@@ -1,5 +1,6 @@
 import { getDashboardSession, sessionHasRole } from "@/lib/auth/authorization";
 import { amendOrder, readOrderAmendments, OrderAmendmentError } from "@/services/order-amendments";
+import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +17,11 @@ async function handle(request: Request, context: Context, write: boolean) {
     const body = JSON.parse(String(form.get("data"))) as Record<string, unknown>;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new OrderAmendmentError("Invalid correction.");
     const file = form.get("invoice");
-    return Response.json(await amendOrder(saleId, session, body, file instanceof File && file.size ? file : undefined));
+    const result = await amendOrder(saleId, session, body, file instanceof File && file.size ? file : undefined);
+    const shopifySync = result.stockRotationTransactionId
+      ? await attemptAutomaticShopifySync(result.stockRotationTransactionId, "pending")
+      : "not_required";
+    return Response.json({ ...result, shopifySync });
   } catch (error) {
     const duplicate = typeof error === "object" && error && "code" in error && error.code === "23505";
     return Response.json({ error: { message: error instanceof OrderAmendmentError ? error.message : duplicate ? "That invoice number is already used by another order." : error instanceof SyntaxError ? "Invalid correction data." : "Unable to save or load this order. Please refresh and try again." } }, { status: error instanceof OrderAmendmentError ? error.status : duplicate ? 409 : error instanceof SyntaxError ? 400 : 500 });
