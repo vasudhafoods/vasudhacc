@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import type { DashboardRole } from "@/types/auth";
 import type { WarehouseBucketBalance, WarehouseInventoryBucket, WarehouseLocationOption, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
 type EntryKind = "return" | "disposal";
@@ -11,12 +12,13 @@ interface Line { id: string; productId: string; quantity: string; condition: Ret
 
 const inputClass = "h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
 
-export function WarehouseReturnDisposal({ kind, products, locations, balances, expiries }: {
+export function WarehouseReturnDisposal({ kind, products, locations, balances, expiries, userRole }: {
   kind: EntryKind;
   products: WarehouseProductOption[];
   locations: WarehouseLocationOption[];
   balances: WarehouseBucketBalance[];
   expiries: WarehouseWorkspaceData["expiries"];
+  userRole: DashboardRole;
 }) {
   const router = useRouter();
   const [orderType, setOrderType] = useState<"shopify" | "retail">("shopify");
@@ -34,6 +36,7 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
   const [disposalReason, setDisposalReason] = useState<DisposalReason>("damaged");
   const [expiryDate, setExpiryDate] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [approvalProof, setApprovalProof] = useState<File | null>(null);
   const [stage, setStage] = useState<"edit" | "review" | "success">("edit");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -64,6 +67,7 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
       if (manifestedDate && manifestedDate > receivedDate) return setError("Manifested date cannot be after the received date.");
     } else {
       if (!category || !productId || !disposalQuantity || !remarks.trim() || !expiryDate) return setError("Complete product category, product, quantity, expiry, and reason / remark.");
+      if (userRole !== "admin" && !approvalProof) return setError("Upload your manager's approval proof before continuing.");
       const count = Number(disposalQuantity);
       if (!Number.isSafeInteger(count) || count <= 0) return setError("Enter a positive whole quantity.");
       const availableQuantity = available(productId, sourceBucket) ?? 0;
@@ -88,7 +92,10 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
         }
         setSuccess(`Return ${orderId.trim()} recorded. Usable items are in QC for inspection; damaged and expired items are in Damaged; missing items do not increase stock.`);
       } else {
-        const response = await fetch("/api/warehouse/disposals", { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ productId, warehouseLocationId: locationId, sourceBucket, quantity: Number(disposalQuantity), disposalReason, expiryDate, referenceId: `DISP-${new Date().toISOString().slice(0, 10)}-${key.slice(0, 8)}`, notes: `${remarks.trim()}${expiryDate ? ` · Expiry ${expiryDate}` : ""}`, shopifyMappingId: sourceBucket === "online" ? selectedProduct?.shopifyMappingId : undefined }) });
+        const form = new FormData();
+        form.set("payload", JSON.stringify({ productId, warehouseLocationId: locationId, sourceBucket, quantity: Number(disposalQuantity), disposalReason, expiryDate, referenceId: `DISP-${new Date().toISOString().slice(0, 10)}-${key.slice(0, 8)}`, notes: `${remarks.trim()}${expiryDate ? ` · Expiry ${expiryDate}` : ""}`, shopifyMappingId: sourceBucket === "online" ? selectedProduct?.shopifyMappingId : undefined }));
+        if (approvalProof) form.set("approvalProof", approvalProof);
+        const response = await fetch("/api/warehouse/disposals", { method: "POST", headers: { "Idempotency-Key": key }, body: form });
         const body = await response.json() as { result?: { shopifySync?: string }; error?: { message?: string } };
         if (!response.ok || !body.result) throw new Error(body.error?.message ?? "Disposal could not be recorded.");
         setSuccess(`Disposal recorded. ${sourceBucket === "online" ? `Shopify inventory sync: ${body.result.shopifySync ?? "pending"}.` : "Stock was reduced in the selected warehouse bucket."}`);
@@ -105,7 +112,7 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
   function startAgain() {
     setOrderId(""); setCourier(""); setRtoCost(""); setManifestedDate(""); setReceivedDate(new Date().toISOString().slice(0, 10));
     setLines([{ id: crypto.randomUUID(), productId: products[0]?.id ?? "", quantity: "", condition: "usable", remarks: "" }]);
-    setDisposalQuantity(""); setRemarks(""); setSuccess(null); setStage("edit"); setError(null);
+    setDisposalQuantity(""); setRemarks(""); setApprovalProof(null); setSuccess(null); setStage("edit"); setError(null);
   }
 
   const title = kind === "return" ? "Return on order" : "Stock disposal";
@@ -133,6 +140,7 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
       {stage === "edit" && kind === "disposal" ? <form className="space-y-5" onSubmit={review}>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Field label="Product category"><select className={inputClass} value={category} onChange={(e) => { const next = e.target.value as WarehouseProductOption["category"]; setCategory(next); const nextProducts = products.filter((product) => product.category === next); setProductId((nextProducts.length ? nextProducts : products)[0]?.id ?? ""); setExpiryDate(""); }} required><option value="">Select category</option><option value="noodles">Noodles</option><option value="cookies">Cookies</option><option value="rte">RTE</option><option value="other">Other</option></select></Field><Field label="Product name" hint={!categoryProducts.length && category ? "No products are tagged in this category; showing all products." : undefined}><select className={inputClass} value={productId} onChange={(e) => { setProductId(e.target.value); const next = products.find((product) => product.id === e.target.value); if (next) setCategory(next.category); setExpiryDate(""); }} required><option value="">Select product</option>{matchingProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku}</option>)}</select></Field><Field label="Warehouse location"><select className={inputClass} value={locationId} onChange={(e) => { setLocationId(e.target.value); setExpiryDate(""); }} required>{locations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Stock bucket"><select className={inputClass} value={sourceBucket} onChange={(e) => setSourceBucket(e.target.value as WarehouseInventoryBucket)}><option value="damaged">Damaged</option><option value="qc">QC / Hold</option><option value="buffer">Buffer</option><option value="retail">Retail</option><option value="online">Shopify / Online</option></select></Field><Field label="Quantity"><input className={inputClass} type="number" min="1" step="1" max={productId ? available(productId, sourceBucket) : undefined} value={disposalQuantity} onChange={(e) => setDisposalQuantity(e.target.value)} required/></Field><Field label="Unit price (fixed)"><input className={inputClass} value={selectedProduct ? `₹${(selectedProduct.unitPricePaisa / 100).toFixed(2)}` : ""} readOnly/></Field><Field label="Stock value (auto)"><input className={inputClass} value={selectedProduct && disposalQuantity ? `₹${(selectedProduct.unitPricePaisa * Number(disposalQuantity) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : ""} readOnly/></Field><Field label="Reason"><select className={inputClass} value={disposalReason} onChange={(e) => setDisposalReason(e.target.value as DisposalReason)}><option value="damaged">Damaged</option><option value="expired">Expired</option><option value="contaminated">Contaminated</option><option value="quality_rejected">Quality rejected</option><option value="other">Other</option></select></Field><Field label="Expiry date" hint={matchingExpiry.length ? `Recorded batch dates: ${matchingExpiry.map((batch) => `${new Date(batch.expiryDate).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" })} (${batch.batchNumber})`).join(", ")}` : "Enter the expiry printed on the affected product."}><input className={inputClass} type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} required/></Field></div>
         <Field label="Reason / remark"><textarea className="min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" value={remarks} onChange={(e) => setRemarks(e.target.value)} maxLength={500} required/></Field>
+        <Field label="Manager approval proof" hint={userRole === "admin" ? "Optional for administrators. PDF or image, up to 3 MB." : "Required before warehouse staff can dispose stock. PDF or image, up to 3 MB."}><input className={inputClass} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" required={userRole !== "admin"} onChange={(event) => { const file = event.target.files?.[0] ?? null; if (file && (file.size > 3 * 1024 * 1024 || !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type))) { setError("Choose a PDF, JPG, PNG, or WebP file up to 3 MB."); event.target.value = ""; setApprovalProof(null); return; } setApprovalProof(file); setError(null); }}/></Field>
         <div className="flex justify-end"><button type="submit" className="h-11 rounded-xl bg-[#174f40] px-6 text-sm font-bold text-white">Review disposal →</button></div>
       </form> : null}
       {stage === "review" ? <div className="space-y-5"><div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">Review the stock movement before recording it. Ledger quantities will update when you submit.</div><dl className="divide-y divide-slate-100 rounded-xl border border-slate-200 px-4"><Summary label="Entry" value={title}/><Summary label={kind === "return" ? "Order" : "Product"} value={kind === "return" ? `${orderId} · ${orderType.toUpperCase()}` : selectedProduct?.name ?? ""}/><Summary label="Quantity" value={kind === "return" ? `${saleableQty} packets` : `${disposalQuantity} packets from ${sourceBucket}`}/><Summary label="Stock effect" value={kind === "return" ? "Usable → QC; damaged / expired → Damaged; missing → no balance change" : `${sourceBucket} reduced by ${disposalQuantity}`}/>{kind === "disposal" && selectedProduct ? <Summary label="Stock value removed" value={`₹${(selectedProduct.unitPricePaisa * Number(disposalQuantity) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`}/> : null}</dl><div className="grid gap-3 sm:grid-cols-2"><button type="button" onClick={() => setStage("edit")} disabled={busy} className="h-11 rounded-xl border border-slate-300 font-bold text-slate-700">← Edit</button><button type="button" onClick={submit} disabled={busy} className="h-11 rounded-xl bg-[#174f40] font-bold text-white disabled:opacity-50">{busy ? "Saving…" : "Submit entry"}</button></div></div> : null}

@@ -42,6 +42,7 @@ export interface WarehouseActivity {
   reference: string;
   occurredAt: string;
   details: string[];
+  documents?: { id: string; fileName: string; url: string }[];
 }
 
 export interface WarehouseWorkspaceData {

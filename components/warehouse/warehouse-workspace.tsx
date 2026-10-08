@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { WarehouseReturnDisposal } from "@/components/warehouse/warehouse-return-disposal";
 import { WarehouseOrdersPanel } from "@/components/warehouse/warehouse-orders-panel";
 import { receiptAllocation } from "@/lib/inventory/allocation";
+import type { DashboardRole } from "@/types/auth";
 import type { ShopifySyncStatus, WarehouseInventoryBucket, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
 type Panel = "dashboard" | "orders" | "receive" | "dispatch" | "returns" | "disposal" | "product" | "activity";
@@ -164,10 +165,11 @@ function SummaryRow({ label, value, strong = false }: { label: string; value: Re
 }
 
 export function WarehouseWorkspace({ user, initialData }: {
-  user: { displayName: string; username: string };
+  user: { displayName: string; username: string; role: DashboardRole };
   initialData: WarehouseWorkspaceData;
 }) {
   const router = useRouter();
+  const canReviewWarehouseDisposals = user.role === "admin" || user.role === "management";
   const firstProduct = initialData.products[0]?.id ?? "";
   const firstLocation = initialData.locations[0]?.id ?? "";
   const [panel, setPanel] = useState<Panel>("dashboard");
@@ -673,8 +675,8 @@ export function WarehouseWorkspace({ user, initialData }: {
       </div>
     </section> : null}
 
-    {panel === "returns" ? <WarehouseReturnDisposal kind="return" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries}/> : null}
-    {panel === "disposal" ? <WarehouseReturnDisposal kind="disposal" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries}/> : null}
+    {panel === "returns" ? <WarehouseReturnDisposal kind="return" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries} userRole={user.role}/> : null}
+    {panel === "disposal" ? <WarehouseReturnDisposal kind="disposal" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries} userRole={user.role}/> : null}
 
     {panel === "product" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{productStep === "edit" ? "Step 1 of 2 · Enter" : productStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{productStep === "success" ? "Product created successfully" : "Add a new product"}</h2><p className="mt-1 text-sm text-slate-500">Use this only when the SKU is not already in the product list.</p></div>
@@ -686,9 +688,9 @@ export function WarehouseWorkspace({ user, initialData }: {
     </section> : null}
 
     {panel === "activity" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><h2 className="text-xl font-bold text-slate-950">My recent updates</h2><p className="mt-1 text-sm text-slate-500">Only entries submitted under <strong>{user.username}</strong> are shown.</p></div>
+      <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><h2 className="text-xl font-bold text-slate-950">{canReviewWarehouseDisposals ? "Recent warehouse updates" : "My recent updates"}</h2><p className="mt-1 text-sm text-slate-500">{canReviewWarehouseDisposals ? "Recent warehouse disposals include their manager approval proof." : <>Only entries submitted under <strong>{user.username}</strong> are shown.</>}</p></div>
       <div className="p-5 sm:p-7"><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Stock receipts shown</p><p className="mt-1 text-2xl font-bold text-emerald-950">{activityCounts.receipts}</p></div><div className="rounded-xl bg-blue-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Retail dispatches shown</p><p className="mt-1 text-2xl font-bold text-blue-950">{activityCounts.dispatches}</p></div><div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Stock transfers shown</p><p className="mt-1 text-2xl font-bold text-amber-950">{activityCounts.transfers}</p></div><div className="rounded-xl bg-sky-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Products created shown</p><p className="mt-1 text-2xl font-bold text-sky-950">{activityCounts.products}</p></div></div>
-        {initialData.activities.length ? <div className="space-y-3">{initialData.activities.map((activity) => <article key={activity.id} className="rounded-xl border border-slate-200 p-4 sm:flex sm:items-start sm:justify-between sm:gap-5"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${activity.kind === "stock_received" ? "bg-emerald-100 text-emerald-800" : activity.kind === "retail_dispatched" ? "bg-blue-100 text-blue-800" : activity.kind === "stock_transferred" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{activity.kind === "stock_received" ? "Stock received" : activity.kind === "retail_dispatched" ? "Retail dispatched" : activity.kind === "stock_transferred" ? "Stock transferred" : "Product created"}</span><span className="text-xs text-slate-400">{localDateTime(activity.occurredAt)}</span></div><h3 className="mt-2 font-bold text-slate-900">{activity.title}</h3><p className="mt-0.5 text-xs font-medium text-slate-500">{activity.reference}</p></div><div className="mt-3 flex max-w-xl flex-wrap gap-2 sm:mt-0 sm:justify-end">{activity.details.map((detail) => <span key={detail} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">{detail}</span>)}</div></article>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-14 text-center"><p className="font-bold text-slate-800">No updates yet</p><p className="mt-1 text-sm text-slate-500">Your submitted receipts, retail dispatches, transfers, and products will appear here.</p><button type="button" onClick={() => changePanel("receive")} className="mt-5 rounded-xl bg-[#174f40] px-5 py-3 text-sm font-bold text-white">Receive first stock</button></div>}
+        {initialData.activities.length ? <div className="space-y-3">{initialData.activities.map((activity) => <article key={activity.id} className="rounded-xl border border-slate-200 p-4 sm:flex sm:items-start sm:justify-between sm:gap-5"><div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${activity.kind === "stock_received" ? "bg-emerald-100 text-emerald-800" : activity.kind === "retail_dispatched" ? "bg-blue-100 text-blue-800" : activity.kind === "stock_transferred" ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800"}`}>{activity.kind === "stock_received" ? "Stock received" : activity.kind === "retail_dispatched" ? "Retail dispatched" : activity.kind === "stock_transferred" ? "Stock transferred" : activity.kind === "stock_disposed" ? "Stock disposed" : "Product created"}</span><span className="text-xs text-slate-400">{localDateTime(activity.occurredAt)}</span></div><h3 className="mt-2 font-bold text-slate-900">{activity.title}</h3><p className="mt-0.5 text-xs font-medium text-slate-500">{activity.reference}</p></div><div className="mt-3 flex max-w-xl flex-wrap gap-2 sm:mt-0 sm:justify-end">{activity.details.map((detail) => <span key={detail} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">{detail}</span>)}{activity.documents?.map((document) => <a key={document.id} className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 underline" href={document.url}>{document.fileName} · Approval proof</a>)}</div></article>)}</div> : <div className="rounded-2xl border border-dashed border-slate-300 py-14 text-center"><p className="font-bold text-slate-800">No updates yet</p><p className="mt-1 text-sm text-slate-500">Your submitted receipts, retail dispatches, transfers, and products will appear here.</p><button type="button" onClick={() => changePanel("receive")} className="mt-5 rounded-xl bg-[#174f40] px-5 py-3 text-sm font-bold text-white">Receive first stock</button></div>}
       </div>
     </section> : null}
   </div>;

@@ -1,10 +1,11 @@
 import "server-only";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import {
   auditEvents,
   inventoryBalances,
   inventoryBatches,
+  inventoryReceiptAttachments,
   inventoryTransactionLines,
   inventoryTransactions,
   offlineSaleCollections,
@@ -40,7 +41,7 @@ function productAuditActivity(row: typeof auditEvents.$inferSelect): WarehouseAc
   };
 }
 
-export async function getWarehouseWorkspaceData(actorUsername: string): Promise<WarehouseWorkspaceData> {
+export async function getWarehouseWorkspaceData(actorUsername: string, includeAllDisposals = false): Promise<WarehouseWorkspaceData> {
   const db = getDatabase();
   const [productRows, mappingRows, locationRows, balanceRows, expiryRows, transactionRows, productAuditRows, salesOrderData, shopifyOrderData] = await Promise.all([
     db.select({ id: products.id, sku: products.sku, name: products.name, packSize: products.packSize, category: products.category, unitPricePaisa: products.unitPricePaisa })
@@ -58,10 +59,16 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
       transactionNumber: inventoryTransactions.transactionNumber,
       type: inventoryTransactions.type,
       referenceId: inventoryTransactions.referenceId,
+      actorUsername: inventoryTransactions.actorUsername,
       occurredAt: inventoryTransactions.occurredAt,
       metadata: inventoryTransactions.metadata,
     }).from(inventoryTransactions)
-      .where(and(eq(inventoryTransactions.actorUsername, actorUsername), inArray(inventoryTransactions.type, ["stock_received", "retail_issue", "return", "channel_transfer", "manual_adjustment"])))
+      .where(and(
+        inArray(inventoryTransactions.type, ["stock_received", "retail_issue", "return", "channel_transfer", "manual_adjustment"]),
+        includeAllDisposals
+          ? or(eq(inventoryTransactions.actorUsername, actorUsername), and(eq(inventoryTransactions.type, "manual_adjustment"), sql`${inventoryTransactions.metadata}->>'action' = 'disposal'`))
+          : eq(inventoryTransactions.actorUsername, actorUsername),
+      ))
       .orderBy(desc(inventoryTransactions.occurredAt)).limit(20),
     db.select().from(auditEvents)
       .where(and(eq(auditEvents.actorUsername, actorUsername), eq(auditEvents.action, "product.created")))
@@ -93,7 +100,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
 
   const transactionActivities: WarehouseActivity[] = [];
   if (transactionRows.length) {
-    const lines = await db.select({
+    const [lines, approvalRows] = await Promise.all([db.select({
       transactionId: inventoryTransactionLines.transactionId,
       productId: inventoryTransactionLines.productId,
       bucket: inventoryTransactionLines.bucket,
@@ -104,7 +111,21 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
     }).from(inventoryTransactionLines)
       .innerJoin(products, eq(inventoryTransactionLines.productId, products.id))
       .innerJoin(warehouseLocations, eq(inventoryTransactionLines.warehouseLocationId, warehouseLocations.id))
-      .where(inArray(inventoryTransactionLines.transactionId, transactionRows.map((transaction) => transaction.id)));
+      .where(inArray(inventoryTransactionLines.transactionId, transactionRows.map((transaction) => transaction.id))),
+    db.select({ id: inventoryReceiptAttachments.id, transactionId: inventoryReceiptAttachments.transactionId, fileName: inventoryReceiptAttachments.fileName })
+      .from(inventoryReceiptAttachments).where(inArray(inventoryReceiptAttachments.transactionId, transactionRows.map((transaction) => transaction.id))),
+    ]);
+    const approvalDocumentsByTransaction = new Map<string, NonNullable<WarehouseActivity["documents"]>>();
+    for (const attachment of approvalRows) {
+      if (!attachment.fileName.startsWith("[Manager Approval] ")) continue;
+      const documents = approvalDocumentsByTransaction.get(attachment.transactionId) ?? [];
+      documents.push({
+        id: attachment.id,
+        fileName: attachment.fileName.replace("[Manager Approval] ", ""),
+        url: `/api/warehouse/receipts/${attachment.transactionId}/attachments/${attachment.id}`,
+      });
+      approvalDocumentsByTransaction.set(attachment.transactionId, documents);
+    }
     const linesByTransaction = new Map<string, typeof lines>();
     for (const line of lines.filter((row) => isPhysicalUnitProduct(row.productName))) {
       const existing = linesByTransaction.get(line.transactionId) ?? [];
@@ -185,7 +206,8 @@ export async function getWarehouseWorkspaceData(actorUsername: string): Promise<
           title: `${Math.abs(disposed?.quantity ?? 0)} packet${Math.abs(disposed?.quantity ?? 0) === 1 ? "" : "s"} disposed`,
           reference: transaction.referenceId ? `${transaction.transactionNumber} · ${transaction.referenceId}` : transaction.transactionNumber,
           occurredAt: transaction.occurredAt.toISOString(),
-          details: [disposed ? `${disposed.productName} (${disposed.sku})` : "", disposed ? `From: ${disposed.bucket}` : "", `Reason: ${disposalReason}`].filter(Boolean),
+          details: [disposed ? `${disposed.productName} (${disposed.sku})` : "", disposed ? `From: ${disposed.bucket}` : "", `Reason: ${disposalReason}`, `Submitted by: ${transaction.actorUsername}`].filter(Boolean),
+          documents: approvalDocumentsByTransaction.get(transaction.id),
         });
         continue;
       }

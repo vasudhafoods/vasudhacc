@@ -7,6 +7,7 @@ import {
   integrationOutbox,
   inventoryBalances,
   inventoryBatches,
+  inventoryReceiptAttachments,
   inventoryTransactionLines,
   inventoryTransactions,
   products,
@@ -204,6 +205,7 @@ export interface DisposeInventoryInput {
   actorUsername: string;
   idempotencyKey: string;
   shopifyMappingId?: string;
+  approvalProof?: { fileName: string; contentType: string; fileSize: number; contentBase64: string };
 }
 
 export interface DisposeInventoryResult {
@@ -615,6 +617,16 @@ export async function disposeInventory(input: DisposeInventoryInput): Promise<Di
       reason: `Stock disposed: ${input.disposalReason.replaceAll("_", " ")}`,
       metadata: { action: "disposal", sourceBucket: input.sourceBucket, disposalReason: input.disposalReason, expiryDate: input.expiryDate.toISOString(), notes: input.notes?.trim() || null, unit: "individual_packet" },
     }).returning({ id: inventoryTransactions.id });
+    if (input.approvalProof) {
+      await tx.insert(inventoryReceiptAttachments).values({
+        transactionId: transaction.id,
+        fileName: `[Manager Approval] ${input.approvalProof.fileName}`,
+        contentType: input.approvalProof.contentType,
+        fileSize: input.approvalProof.fileSize,
+        contentBase64: input.approvalProof.contentBase64,
+        uploadedBy: input.actorUsername,
+      });
+    }
     await tx.update(inventoryBalances).set({ onHand: closingBalance, version: sql`${inventoryBalances.version} + 1`, updatedAt: new Date() })
       .where(eq(inventoryBalances.id, balance.id));
     await tx.insert(inventoryTransactionLines).values({ transactionId: transaction.id, productId: product.id, warehouseLocationId: input.warehouseLocationId, bucket: input.sourceBucket, quantityDelta: -input.quantity, openingBalance: balance.onHand, closingBalance });
