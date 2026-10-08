@@ -41,7 +41,10 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
   const selectedProduct = products.find((product) => product.id === productId) ?? null;
   const categoryProducts = products.filter((product) => product.category === category);
   const matchingProducts = categoryProducts.length ? categoryProducts : products;
-  const available = (id: string, bucket: WarehouseInventoryBucket) => balances.find((balance) => balance.productId === id && balance.warehouseLocationId === locationId && balance.bucket === bucket)?.available ?? 0;
+  const available = (id: string, bucket: WarehouseInventoryBucket) => {
+    const quantity = balances.find((balance) => balance.productId === id && balance.warehouseLocationId === locationId && balance.bucket === bucket)?.available ?? 0;
+    return quantity > 0 ? quantity : undefined;
+  };
   const matchingExpiry = useMemo(() => expiries.filter((batch) => batch.productId === productId && batch.warehouseLocationId === locationId).sort((a, b) => a.expiryDate.localeCompare(b.expiryDate)), [expiries, productId, locationId]);
   const saleableQty = lines.reduce((sum, line) => sum + (Number.isSafeInteger(Number(line.quantity)) && Number(line.quantity) > 0 ? Number(line.quantity) : 0), 0);
 
@@ -63,7 +66,8 @@ export function WarehouseReturnDisposal({ kind, products, locations, balances, e
       if (!category || !productId || !disposalQuantity || !remarks.trim() || !expiryDate) return setError("Complete product category, product, quantity, expiry, and reason / remark.");
       const count = Number(disposalQuantity);
       if (!Number.isSafeInteger(count) || count <= 0) return setError("Enter a positive whole quantity.");
-      if (count > available(productId, sourceBucket)) return setError(`Only ${available(productId, sourceBucket)} packets are available in ${sourceBucket}.`);
+      const availableQuantity = available(productId, sourceBucket) ?? 0;
+      if (count > availableQuantity) return setError(`Only ${availableQuantity} packets are available in ${sourceBucket}.`);
       if (sourceBucket === "online" && !selectedProduct?.shopifyMappingId) return setError("This product needs a verified Shopify mapping before Online stock can be disposed.");
       if (disposalReason === "expired" && !expiryDate) return setError("Select the expired batch date.");
     }
