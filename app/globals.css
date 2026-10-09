@@ -1,13 +1,32 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f7f6;
-  --foreground: #18221f;
+  --background: #fff8e8;
+  --foreground: #333333;
+  --brand-brown: #5a3d2b;
+  --brand-leaf: #5fae3d;
+  --brand-fresh: #78b943;
+  --brand-yellow: #f4c51c;
+  --brand-orange: #f7941d;
+  --brand-cream: #fff8e8;
+  --brand-beige: #f3e7d3;
+  --brand-dark-green: #315b32;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-emerald-50: #f3f8ed;
+  --color-emerald-100: #e7f1db;
+  --color-emerald-200: #d0e4b8;
+  --color-emerald-300: #b3d58a;
+  --color-emerald-400: #98c95d;
+  --color-emerald-500: #78b943;
+  --color-emerald-600: #5fae3d;
+  --color-emerald-700: #4d8f36;
+  --color-emerald-800: #3f7031;
+  --color-emerald-900: #315b32;
+  --color-emerald-950: #203b22;
   --font-sans: "Inter", "Segoe UI", Arial, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, monospace;
 }
@@ -19,4 +38,4 @@ body {
 }
 button, select { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
-::selection { background: #cfe3db; color: #143d33; }
+::selection { background: var(--brand-yellow); color: var(--brand-dark-green); }
