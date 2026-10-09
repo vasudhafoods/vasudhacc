@@ -24,13 +24,13 @@ export function LoginForm({ initialPortal = "admin" }: { initialPortal?: "admin"
     <div>
       <div className="flex items-center justify-between gap-4">
         <label htmlFor={passwordId} className="text-xs font-semibold text-slate-700">Password</label>
-        <Link href={`/forgot-password?portal=${portal}`} className="text-xs font-semibold text-[#315b32] hover:underline">Forgot password?</Link>
+        <Link href={`/forgot-password?portal=${portal}`} className="text-xs font-semibold text-brand-primary hover:underline">Forgot password?</Link>
       </div>
       <div className="relative mt-2">
         <input id={passwordId} name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" required maxLength={500} placeholder="Enter password" className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 pr-16 text-sm text-slate-900 outline-none transition focus:border-emerald-700 focus:bg-white focus:ring-4 focus:ring-emerald-100"/>
         <button type="button" onClick={() => setShowPassword((visible) => !visible)} aria-controls={passwordId} aria-pressed={showPassword} className="absolute inset-y-0 right-0 px-3 text-xs font-semibold text-slate-500 hover:text-slate-800">{showPassword ? "Hide" : "Show"}</button>
       </div>
     </div>
-    <button type="submit" className="h-12 w-full rounded-xl bg-[#315b32] text-sm font-bold text-white shadow-sm transition hover:bg-[#244527]">Sign in to {workspaceName}</button>
+    <button type="submit" className="h-12 w-full rounded-xl bg-brand-primary text-sm font-bold text-white shadow-sm transition hover:bg-emerald-950">Sign in to {workspaceName}</button>
   </form>;
 }

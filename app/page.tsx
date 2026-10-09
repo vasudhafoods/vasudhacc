@@ -26,7 +26,7 @@ export default async function Home() {
   const topProducts = data.products.filter((product) => product.units > 0).slice(0, 6);
 
   return <div className="space-y-7">
-    <header className="rounded-2xl bg-[#143f34] px-5 py-6 text-white shadow-sm sm:px-7">
+    <header className="rounded-2xl bg-emerald-950 px-5 py-6 text-white shadow-sm sm:px-7">
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[.18em] text-emerald-200">Management command summary · Last 30 days</p>
@@ -35,7 +35,7 @@ export default async function Home() {
         </div>
         <div className="flex flex-wrap gap-2">
           <span className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold ${urgentActions ? "bg-amber-100 text-amber-950" : "bg-emerald-100 text-emerald-950"}`}><span className={`size-2 rounded-full ${urgentActions ? "bg-amber-500" : "bg-emerald-500"}`}/>{urgentActions ? `${urgentActions} priority actions` : "No urgent exception"}</span>
-          <a href="/api/executive/export" className="inline-flex items-center rounded-xl border border-white/30 bg-white px-4 py-2 text-xs font-bold text-[#143f34]">Download Management Report</a>
+          <a href="/api/executive/export" className="inline-flex items-center rounded-xl border border-white/30 bg-white px-4 py-2 text-xs font-bold text-emerald-950">Download Management Report</a>
         </div>
       </div>
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-white/15 pt-4 text-[11px] text-emerald-100"><span>Shopify: {view.mode === "live" ? "Live" : view.mode === "snapshot" ? "Snapshot fallback" : "Unavailable"}</span><span>Warehouse: {warehouse.initialized ? "Connected" : "Not ready"}</span><span>Generated: {new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(data.generatedAt))}</span></div>
@@ -55,26 +55,26 @@ export default async function Home() {
     <section className="grid gap-5 xl:grid-cols-[1.25fr_.75fr]">
       <div className="rounded-2xl border border-slate-200 bg-white">
         <div className="flex flex-col justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start">
-          <div><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#2d725f]">Decision intelligence</p><h2 className="mt-1 text-lg font-bold text-slate-950">What needs management attention</h2><p className="mt-1 text-xs leading-5 text-slate-500">Explainable, data-based suggestions with no added AI API cost. Each action cites the condition that triggered it.</p></div>
+          <div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Decision intelligence</p><h2 className="mt-1 text-lg font-bold text-slate-950">What needs management attention</h2><p className="mt-1 text-xs leading-5 text-slate-500">Explainable, data-based suggestions with no added AI API cost. Each action cites the condition that triggered it.</p></div>
           <Link href="/attention" className="shrink-0 text-xs font-bold text-emerald-700">All stock alerts →</Link>
         </div>
         <div className="divide-y divide-slate-100">{data.recommendations.slice(0, 6).map((recommendation) => <Recommendation key={recommendation.id} item={recommendation}/>)}</div>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-violet-700">Marketing analytics</p><h2 className="mt-1 text-lg font-bold text-slate-950">Revenue by acquisition source</h2></div><span className="rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-bold text-violet-700">Shopify attribution</span></div>
+        <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Marketing analytics</p><h2 className="mt-1 text-lg font-bold text-slate-950">Revenue by acquisition source</h2></div><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">Shopify attribution</span></div>
         {sales ? <>
           <div className="mt-5 grid grid-cols-2 gap-3"><MiniMetric label="New-customer orders" value={sales.marketing.newCustomerOrders}/><MiniMetric label="Returning orders" value={sales.marketing.returningCustomerOrders}/><MiniMetric label="Attributed orders" value={sales.marketing.attributedOrders}/><MiniMetric label="Avg. conversion time" value={sales.marketing.averageDaysToConversion === null ? "—" : `${sales.marketing.averageDaysToConversion} days`}/></div>
-          <div className="mt-5"><div className="mb-2 flex justify-between text-[11px] font-semibold text-slate-500"><span>Attribution coverage</span><span>{sales.marketing.attributionCoveragePercent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.min(100, sales.marketing.attributionCoveragePercent)}%` }}/></div></div>
+          <div className="mt-5"><div className="mb-2 flex justify-between text-[11px] font-semibold text-slate-500"><span>Attribution coverage</span><span>{sales.marketing.attributionCoveragePercent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, sales.marketing.attributionCoveragePercent)}%` }}/></div></div>
           <div className="mt-5 divide-y divide-slate-100">{sales.marketing.sources.slice(0, 5).map((source) => <div key={source.label} className="flex items-center gap-3 py-3 text-xs"><div className="min-w-0 flex-1"><p className="truncate font-bold text-slate-800">{source.label}</p><p className="mt-0.5 text-slate-400">{source.orders} orders · {source.units} units</p></div><p className="font-bold text-slate-900">{money(source.revenue, currency)}</p></div>)}{!sales.marketing.sources.length ? <p className="py-6 text-center text-xs text-slate-500">No attributed sources yet. Add UTM tags to marketing links.</p> : null}</div>
         </> : <p className="mt-5 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Marketing attribution needs working Shopify order access.</p>}
-        <div className="mt-5 rounded-xl border border-dashed border-violet-200 bg-violet-50/60 p-4 text-xs leading-5 text-violet-950"><strong>Next connection:</strong> GA4 for sessions and conversion funnel; Meta/Instagram for spend, reach and ROAS; Search Console for organic search queries and CTR.</div>
+        <div className="mt-5 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/60 p-4 text-xs leading-5 text-emerald-950"><strong>Next connection:</strong> GA4 for sessions and conversion funnel; Meta/Instagram for spend, reach and ROAS; Search Console for organic search queries and CTR.</div>
       </div>
     </section>
 
     <section className="grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-5"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-blue-700">Sales × stock</p><h2 className="mt-1 text-lg font-bold text-slate-950">Winning products and stock cover</h2><p className="mt-1 text-xs text-slate-500">Stock uses {data.productStockSource === "warehouse-ledger" ? "Online base packets from the warehouse ledger" : "current Shopify listing units"}.</p></div><Link href="/sales" className="shrink-0 text-xs font-bold text-emerald-700">Full sales →</Link></div>
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-5"><div><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">Sales × stock</p><h2 className="mt-1 text-lg font-bold text-slate-950">Winning products and stock cover</h2><p className="mt-1 text-xs text-slate-500">Stock uses {data.productStockSource === "warehouse-ledger" ? "Online base packets from the warehouse ledger" : "current Shopify listing units"}.</p></div><Link href="/sales" className="shrink-0 text-xs font-bold text-emerald-700">Full sales →</Link></div>
         <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-left text-xs"><thead className="bg-slate-50 text-slate-400"><tr><th className="px-5 py-3">Product</th><th className="text-right">Units sold</th><th className="text-right">Revenue</th><th className="px-5 text-right">Online stock</th></tr></thead><tbody>{topProducts.map((product) => <tr key={product.productId ?? product.title} className="border-t border-slate-100"><td className="max-w-xs px-5 py-3 font-bold text-slate-800">{product.title}</td><td className="text-right">{product.units}</td><td className="text-right">{money(product.revenue, currency)}</td><td className={`px-5 text-right font-bold ${(product.onlineStock ?? 0) <= 0 ? "text-red-600" : "text-slate-800"}`}>{product.onlineStock ?? "—"}</td></tr>)}{!topProducts.length ? <tr><td colSpan={4} className="px-5 py-10 text-center text-slate-500">Sales product data is unavailable.</td></tr> : null}</tbody></table></div>
       </div>
 
@@ -104,7 +104,7 @@ function MiniMetric({ label, value }: { label: string; value: string | number })
 const priorityStyle: Record<ExecutiveRecommendationPriority, string> = {
   urgent: "bg-red-100 text-red-800",
   important: "bg-amber-100 text-amber-800",
-  opportunity: "bg-blue-100 text-blue-800",
+  opportunity: "bg-emerald-100 text-emerald-800",
   monitor: "bg-slate-100 text-slate-700",
 };
 
@@ -124,5 +124,5 @@ function DecisionNumber({ label, value }: { label: string; value: string | numbe
   return <div className="min-w-16 rounded-lg bg-slate-50 px-2 py-2"><p className="text-[9px] uppercase text-slate-400">{label}</p><p className="mt-1 text-xs font-bold text-slate-800">{value}</p></div>;
 }
 
-const healthStyles: Record<CommandCenterHealth, string> = { healthy: "bg-emerald-50 text-emerald-700", monitor: "bg-blue-50 text-blue-700", low: "bg-amber-50 text-amber-700", critical: "bg-orange-50 text-orange-700", urgent: "bg-red-50 text-red-700", "out-of-stock": "bg-slate-800 text-white" };
+const healthStyles: Record<CommandCenterHealth, string> = { healthy: "bg-emerald-50 text-emerald-700", monitor: "bg-emerald-50 text-emerald-700", low: "bg-amber-50 text-amber-700", critical: "bg-orange-50 text-orange-700", urgent: "bg-red-50 text-red-700", "out-of-stock": "bg-slate-800 text-white" };
 function HealthBadge({ health }: { health: CommandCenterHealth }) { return <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${healthStyles[health]}`}>{health.replaceAll("-", " ")}</span>; }

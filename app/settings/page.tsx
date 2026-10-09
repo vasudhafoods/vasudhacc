@@ -19,7 +19,7 @@ export default async function SettingsPage() {
   ]);
   const products = [...new Map(feed.items.map((item) => [item.productId, { id: item.productId, title: item.productTitle }])).values()].sort((a, b) => a.title.localeCompare(b.title));
   return <div className="space-y-6">
-    <div><p className="text-xs font-medium text-[#2d725f]">Configuration</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Inventory settings</h1><p className="mt-1 text-sm text-slate-500">Thresholds, reorder assumptions, integrations, notification channels, and staff access.</p></div>
+    <div><p className="text-xs font-medium text-emerald-700">Configuration</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Inventory settings</h1><p className="mt-1 text-sm text-slate-500">Thresholds, reorder assumptions, integrations, notification channels, and staff access.</p></div>
     {session.role === "admin" ? <StaffAccountsPanel initialAccounts={staffAccounts}/> : null}
     <ShopifyCatalogSync initialStatus={database}/>
     <OperationsSettingsForm initial={settings} products={products}/>

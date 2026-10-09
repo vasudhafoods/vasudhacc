@@ -21,10 +21,10 @@ export function Sidebar({ mobile = false, role }: { mobile?: boolean; role?: Das
   const pathname = usePathname();
   const warehouseOnly = role ? isWarehouseRole(role) : false;
   const retailSalesOnly = role ? isRetailSalesRole(role) : false;
-  return <aside className={mobile ? "block" : "hidden h-screen w-[248px] shrink-0 border-r border-[#f3e7d3] bg-white lg:sticky lg:top-0 lg:block"}>
-    <div className="flex h-20 items-center gap-3 border-b-2 border-[#f3e7d3] px-6">
+  return <aside className={mobile ? "block" : "hidden h-screen w-[248px] shrink-0 border-r border-brand-border bg-white lg:sticky lg:top-0 lg:block"}>
+    <div className="flex h-20 items-center gap-3 border-b-2 border-brand-border px-6">
       <Image src="/icon.svg" alt="" width={38} height={38} priority className="size-9 rounded-full"/>
-      <div><p className="text-[15px] font-semibold tracking-tight text-[#5a3d2b]">Vasudha Foods</p><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#315b32]">Command Center</p></div>
+      <div><p className="text-[15px] font-semibold tracking-tight text-brand-heading">Vasudha Foods</p><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-brand-primary">Command Center</p></div>
     </div>
     <nav className="flex h-[calc(100%-5rem)] flex-col px-3 py-5" aria-label="Main navigation">
       {warehouseOnly ? <>
@@ -34,13 +34,13 @@ export function Sidebar({ mobile = false, role }: { mobile?: boolean; role?: Das
       </> : retailSalesOnly ? <>
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-400">Sales</p>
         <Link href="/sales" className="mb-1 flex items-center gap-3 rounded-lg bg-emerald-100 px-3 py-3 text-sm font-semibold text-emerald-950"><Icon name="sales" className="size-[18px]"/>Raise retail order</Link>
-        <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/70 p-3 text-xs leading-5 text-blue-950">Create customer invoices and track warehouse fulfillment and payments.</div>
+        <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50/70 p-3 text-xs leading-5 text-emerald-950">Create customer invoices and track warehouse fulfillment and payments.</div>
       </> : <>
         <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-400">Overview</p>
-        {primary.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} href={item.href} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${active ? "bg-emerald-100 text-emerald-950" : "text-slate-600 hover:bg-[#fff8e8]"}`}><Icon name={item.icon} className="size-[18px]"/>{item.label}</Link>; })}
+        {primary.map((item) => { const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href); return <Link key={item.href} href={item.href} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${active ? "bg-emerald-100 text-emerald-950" : "text-slate-600 hover:bg-brand-surface"}`}><Icon name={item.icon} className="size-[18px]"/>{item.label}</Link>; })}
         <p className="mt-6 px-3 pb-2 text-[10px] font-semibold uppercase tracking-[.14em] text-slate-400">Workspace</p>
-        {workspace.map((item) => { const active=pathname.startsWith(item.href); return <Link key={item.href} href={item.href} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${active?"bg-emerald-100 text-emerald-950":"text-slate-600 hover:bg-[#fff8e8]"}`}><Icon name={item.icon} className="size-[18px]"/>{item.label}</Link>; })}
-        <div className="mt-auto border-t border-[#f3e7d3] pt-3"><Link href="/settings" className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${pathname.startsWith("/settings")?"bg-emerald-100 text-emerald-950":"text-slate-500 hover:bg-[#fff8e8]"}`}><Icon name="settings" className="size-[18px]"/>Settings</Link></div>
+        {workspace.map((item) => { const active=pathname.startsWith(item.href); return <Link key={item.href} href={item.href} className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${active?"bg-emerald-100 text-emerald-950":"text-slate-600 hover:bg-brand-surface"}`}><Icon name={item.icon} className="size-[18px]"/>{item.label}</Link>; })}
+        <div className="mt-auto border-t border-brand-border pt-3"><Link href="/settings" className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm ${pathname.startsWith("/settings")?"bg-emerald-100 text-emerald-950":"text-slate-500 hover:bg-brand-surface"}`}><Icon name="settings" className="size-[18px]"/>Settings</Link></div>
       </>}
     </nav>
   </aside>;

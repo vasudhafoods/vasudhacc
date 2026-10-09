@@ -17,15 +17,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
     <div className="mx-auto w-full max-w-5xl">
       <header className="text-center">
         <Image src="/icon.svg" alt="" width={52} height={52} priority className="mx-auto size-13 rounded-full"/>
-        <p className="mt-3 text-xl font-bold tracking-tight text-[#5a3d2b]">Vasudha Foods</p>
-        <p className="mt-1 text-[10px] font-semibold uppercase tracking-[.18em] text-[#315b32]">Command Center</p>
-        <h1 className="mt-6 text-2xl font-bold tracking-tight text-[#5a3d2b] sm:text-3xl">Sign in to Vasudha</h1>
+        <p className="mt-3 text-xl font-bold tracking-tight text-brand-heading">Vasudha Foods</p>
+        <p className="mt-1 text-[10px] font-semibold uppercase tracking-[.18em] text-brand-primary">Command Center</p>
+        <h1 className="mt-6 text-2xl font-bold tracking-tight text-brand-heading sm:text-3xl">Sign in to Vasudha</h1>
         <p className="mt-2 text-sm text-slate-500">Choose your role. You can only access the workspace assigned to your account.</p>
       </header>
 
       {message ? <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-center text-sm font-medium text-rose-800" role="alert">{message}</div> : null}
 
-      <section className={`mx-auto mt-9 w-full max-w-md rounded-3xl border border-[#f3e7d3] bg-white p-6 shadow-[0_18px_50px_rgba(90,61,43,.08)] sm:p-8 ${error ? "ring-2 ring-rose-100" : ""}`} aria-label="Sign in form">
+      <section className={`mx-auto mt-9 w-full max-w-md rounded-3xl border border-brand-border bg-white p-6 shadow-[0_18px_50px_rgba(90,61,43,.08)] sm:p-8 ${error ? "ring-2 ring-rose-100" : ""}`} aria-label="Sign in form">
         <LoginForm initialPortal={portal === "warehouse" || portal === "sales" ? portal : "admin"}/>
       </section>
       <p className="mt-5 text-center text-[11px] text-slate-400">Secure sessions expire automatically after 12 hours.</p>

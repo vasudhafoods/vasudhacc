@@ -64,11 +64,11 @@ export function ShopifyCatalogSync({ initialStatus }: { initialStatus: Warehouse
     <section className="rounded-xl border border-slate-200 bg-white p-5">
     <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[.12em] text-[#2d725f]">Shopify integration</p>
+        <p className="text-xs font-semibold uppercase tracking-[.12em] text-emerald-700">Shopify integration</p>
         <h2 className="mt-1 text-sm font-semibold text-slate-900">Automatic Shopify synchronization</h2>
         <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">New Online stock is sent to Shopify immediately. Verified Shopify fulfillments reduce the Online packet ledger, while fulfilled returns add packets back. The daily job maintains subscriptions, refreshes mappings, and retries interrupted stock writes.</p>
       </div>
-      <button onClick={syncCatalog} disabled={!ready || syncing} className="shrink-0 rounded-lg bg-[#315b32] px-4 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{syncing ? "Synchronizing…" : "Sync Shopify now"}</button>
+      <button onClick={syncCatalog} disabled={!ready || syncing} className="shrink-0 rounded-lg bg-brand-primary px-4 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{syncing ? "Synchronizing…" : "Sync Shopify now"}</button>
     </div>
     <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <Status label="Database" value={initialStatus.initialized ? "Ready" : initialStatus.configured ? "Migration required" : "Not configured"}/>
