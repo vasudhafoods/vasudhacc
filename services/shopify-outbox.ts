@@ -113,6 +113,8 @@ async function executeAdjustment(job: typeof integrationOutbox.$inferSelect): Pr
         delta: adjustment.quantityDelta,
         inventoryItemId: adjustment.inventoryItemId,
         locationId: adjustment.locationId,
+        // Shopify requires this field; null applies the delta without a compare-and-set check.
+        changeFromQuantity: null,
       }],
     },
     idempotencyKey: remoteIdempotencyKey(job.id, job.payload),
