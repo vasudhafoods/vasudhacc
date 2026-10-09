@@ -132,14 +132,13 @@ npm run build
 ## Deployment checklist
 
 1. Configure all required environment variables for the Vercel Production environment. Optionally set `APP_BASE_URL` after the custom domain has a working production deployment; otherwise Vercel's production URL is used automatically.
-2. Run `npm run db:migrate` against the production Neon database.
-3. Deploy the application.
-4. Verify the domain used by `ALERT_EMAIL_FROM` in Resend and enable **Daily email summary** under Settings (existing installations only).
-5. Confirm an unauthenticated request redirects to `/login`.
-6. Sign in and verify current inventory against Shopify.
-7. Under Settings, create a warehouse test account and confirm it opens only the Warehouse desk.
-8. Confirm the Shopify app version includes `write_inventory` and `read_fulfillments`, release that version, and approve the updated installation.
-9. Click **Sync Shopify now** once. Verify that the success message confirms two Shopify order automations are connected.
-10. Submit a test warehouse receipt and verify the final summary says **Synced automatically**.
-11. Fulfill a test Pack-of-N order and confirm the Neon Online balance falls by the number of individual packets; return and restock that fulfilled line and confirm it rises once.
-12. Confirm the next scheduled cron execution returns `200`, refreshes the catalogue, creates the dated snapshot, and records the email result in the snapshot run.
+2. Deploy the application. The Vercel production build runs `npm run db:migrate` against its configured Neon database before building the app.
+3. Verify the domain used by `ALERT_EMAIL_FROM` in Resend and enable **Daily email summary** under Settings (existing installations only).
+4. Confirm an unauthenticated request redirects to `/login`.
+5. Sign in and verify current inventory against Shopify.
+6. Under Settings, create a warehouse test account and confirm it opens only the Warehouse desk.
+7. Confirm the Shopify app version includes `write_inventory` and `read_fulfillments`, release that version, and approve the updated installation.
+8. Click **Sync Shopify now** once. Verify that the success message confirms two Shopify order automations are connected.
+9. Submit a test warehouse receipt and verify the final summary says **Synced automatically**.
+10. Fulfill a test Pack-of-N order and confirm the Neon Online balance falls by the number of individual packets; return and restock that fulfilled line and confirm it rises once.
+11. Confirm the next scheduled cron execution returns `200`, refreshes the catalogue, creates the dated snapshot, and records the email result in the snapshot run.
