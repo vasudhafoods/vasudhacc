@@ -51,15 +51,19 @@ export async function maintainShopifyAutomation(requestUrl?: string) {
         const payloads = recoveryPayloads(order);
         const apply = async (topic: ShopifyWebhookTopic, payload: unknown) => {
           const hash = shopifyPayloadHash(Buffer.from(JSON.stringify(payload)));
-          await processShopifyWebhook({ eventId: `recovery:${topic}:${order.id}:${hash}`, topic, payloadHash: hash, payload });
+          const eventId = `recovery:${topic}:${order.id}:${hash}`;
+          try {
+            await processShopifyWebhook({ eventId, topic, payloadHash: hash, payload });
+          } catch (error) {
+            const message = `Order ${order.name}: ${error instanceof Error ? error.message : "Recovery failed"}`;
+            // A failed event saved with its payload is retried separately, so one bad order cannot stall the scan.
+            const [saved] = await db.select({ status: shopifyWebhookEvents.status }).from(shopifyWebhookEvents).where(sql`${shopifyWebhookEvents.shopifyEventId} = ${eventId} and ${shopifyWebhookEvents.payload} is not null`);
+            if (saved?.status !== "failed") throw new Error(message);
+            errors.push(message);
+          }
         };
-        try {
-          await apply(order.cancelledAt ? "orders/cancelled" : "orders/create", payloads.order);
-          if (!order.cancelledAt) for (const refund of payloads.refunds) await apply("refunds/create", refund);
-        } catch (error) {
-          // Do not advance the window past an order whose complete set of events is not persisted.
-          throw new Error(`Order ${order.name}: ${error instanceof Error ? error.message : "Recovery failed"}`);
-        }
+        await apply(order.cancelledAt ? "orders/cancelled" : "orders/create", payloads.order);
+        if (!order.cancelledAt) for (const refund of payloads.refunds) await apply("refunds/create", refund);
       }
       const next = result.orders.pageInfo;
       await db.update(shopifySyncState).set(next.hasNextPage
