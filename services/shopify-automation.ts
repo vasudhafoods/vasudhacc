@@ -10,10 +10,15 @@ import { processShopifyOutbox } from "./shopify-outbox";
 
 const KEY = "orders";
 export async function readShopifyAutomationStatus() {
-  const db = getDatabase();
-  const [state] = await db.select().from(shopifySyncState).where(eq(shopifySyncState.key, KEY));
-  const [events] = await db.select({ lastEventAt: sql<string | null>`max(${shopifyWebhookEvents.processedAt}) filter (where ${shopifyWebhookEvents.status} = 'succeeded')`, failed: sql<number>`count(*) filter (where ${shopifyWebhookEvents.status} = 'failed')::int` }).from(shopifyWebhookEvents);
-  return { enabledAt: state?.enabledAt ?? null, subscriptionsCheckedAt: state?.subscriptionsCheckedAt ?? null, lastSucceededAt: state?.lastSucceededAt ?? null, checkedThrough: state?.checkedThrough ?? null, error: state?.lastError ?? null, ...events };
+  try {
+    const db = getDatabase();
+    const [state] = await db.select().from(shopifySyncState).where(eq(shopifySyncState.key, KEY));
+    const [events] = await db.select({ lastEventAt: sql<string | null>`max(${shopifyWebhookEvents.processedAt}) filter (where ${shopifyWebhookEvents.status} = 'succeeded')`, failed: sql<number>`count(*) filter (where ${shopifyWebhookEvents.status} = 'failed')::int` }).from(shopifyWebhookEvents);
+    return { enabledAt: state?.enabledAt ?? null, subscriptionsCheckedAt: state?.subscriptionsCheckedAt ?? null, lastSucceededAt: state?.lastSucceededAt ?? null, checkedThrough: state?.checkedThrough ?? null, error: state?.lastError ?? null, ...events };
+  } catch (error) {
+    console.error("Unable to read Shopify automation status", { name: error instanceof Error ? error.name : "UnknownError" });
+    return { enabledAt: null, subscriptionsCheckedAt: null, lastSucceededAt: null, checkedThrough: null, lastEventAt: null, failed: 0, error: "Database migration required. Apply the latest database migrations to enable automatic Shopify sync." };
+  }
 }
 
 export async function maintainShopifyAutomation(requestUrl?: string) {

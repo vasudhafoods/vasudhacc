@@ -78,7 +78,7 @@ export function ShopifyCatalogSync({ initialStatus }: { initialStatus: Warehouse
       <button onClick={syncCatalog} disabled={!ready || syncing} className="shrink-0 rounded-lg bg-brand-primary px-4 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{syncing ? "Synchronizing…" : "Refresh product catalog"}</button>
     </div>
     <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
-      <p className="font-semibold">{automation?.error ? "Automatic sync needs attention" : automation?.subscriptionsCheckedAt ? "Live order webhooks connected" : "Checking automatic order connection…"}</p>
+      <p className="font-semibold">{automation?.error ? (automation.error.includes("Database migration required") ? "Database migration required" : "Automatic sync needs attention") : automation?.subscriptionsCheckedAt ? "Live order webhooks connected" : "Checking automatic order connection…"}</p>
       {automation?.subscriptionsCheckedAt ? <p className="mt-1">Connection last verified: {new Date(automation.subscriptionsCheckedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</p> : null}
       <p className="mt-1">Last processed event: {automation?.lastEventAt ? new Date(automation.lastEventAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "No event processed yet"}</p>
       {automation?.error ? <p role="alert" className="mt-2 text-red-700">{automation.error}</p> : null}
