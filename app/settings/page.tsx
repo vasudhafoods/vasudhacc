@@ -7,21 +7,27 @@ import { ShopifyCatalogSync } from "@/components/settings/shopify-catalog-sync";
 import { StaffAccountsPanel } from "@/components/settings/staff-accounts-panel";
 import { getWarehouseFoundationStatus } from "@/services/warehouse-foundation";
 import { listStaffAccounts } from "@/services/staff-accounts";
+import { readBundleSetup } from "@/services/product-bundles";
+import { ComboContentsPanel } from "@/components/settings/combo-contents-panel";
+import { isManagementRole } from "@/types/auth";
 
 export default async function SettingsPage() {
   const session = await requireDashboardSession();
   await connection();
-  const [settings, feed, database, staffAccounts] = await Promise.all([
+  const canManage = isManagementRole(session.role);
+  const [settings, feed, database, staffAccounts, bundles] = await Promise.all([
     readOperationsSettings(),
     getInventoryFeed(),
     getWarehouseFoundationStatus(),
     session.role === "admin" ? listStaffAccounts() : Promise.resolve([]),
+    canManage ? readBundleSetup() : Promise.resolve(null),
   ]);
   const products = [...new Map(feed.items.map((item) => [item.productId, { id: item.productId, title: item.productTitle }])).values()].sort((a, b) => a.title.localeCompare(b.title));
   return <div className="space-y-6">
     <div><p className="text-xs font-medium text-emerald-700">Configuration</p><h1 className="mt-1 text-2xl font-semibold text-slate-900">Inventory settings</h1><p className="mt-1 text-sm text-slate-500">Thresholds, reorder assumptions, integrations, notification channels, and staff access.</p></div>
     {session.role === "admin" ? <StaffAccountsPanel initialAccounts={staffAccounts}/> : null}
     <ShopifyCatalogSync initialStatus={database}/>
+    {bundles ? <ComboContentsPanel initial={bundles}/> : null}
     <OperationsSettingsForm initial={settings} products={products}/>
   </div>;
 }

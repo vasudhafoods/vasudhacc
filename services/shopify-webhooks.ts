@@ -16,6 +16,8 @@ import {
 import { getShopifyConfig } from "@/lib/validation/env";
 import { inventoryWebhookPayload } from "@/lib/shopify/webhook-payload";
 import { targetChannelBalances } from "@/lib/inventory/stock-rotation";
+import { isBundleProduct } from "@/lib/inventory/physical-units";
+import { bundleComponents } from "./product-bundles";
 
 export const SHOPIFY_WEBHOOK_TOPICS = ["orders/create", "orders/cancelled", "fulfillments/create", "refunds/create"] as const;
 export type ShopifyWebhookTopic = (typeof SHOPIFY_WEBHOOK_TOPICS)[number];
@@ -261,28 +263,36 @@ async function warehouseLocationId(productId: string, shopifyLocationName: strin
   throw new Error(`Cannot safely match Shopify location “${shopifyLocationName}” to one warehouse location.`);
 }
 
+// A combo consumes its recipe's individual packets; other listings consume their Pack of 1 base product.
+async function packetProducts(mapping: MappingRow): Promise<{ productId: string; productName: string; sku: string; multiplier: number }[]> {
+  const components = await bundleComponents(mapping.productId);
+  if (components.length) {
+    const combos = packMultiplier(mapping.productName);
+    return components.map((component) => ({ productId: component.productId, productName: component.name, sku: component.sku, multiplier: component.quantity * combos }));
+  }
+  if (isBundleProduct(mapping.productName)) throw new Error(`Combo “${mapping.productName}” has no contents yet. Add its individual packets in Settings → Combo contents.`);
+  return [await basePacketProduct(mapping)];
+}
+
 async function resolveMovements(lines: RawMovement[]): Promise<ResolvedMovement[]> {
   const aggregate = new Map<string, ResolvedMovement>();
   for (const line of lines) {
     const mapping = await variantMapping(line.variantId, line.shopifyLocationId);
-    const base = await basePacketProduct(mapping);
-    const locationId = await warehouseLocationId(base.productId, mapping.shopifyLocationName);
-    const packetQuantity = line.variantQuantity * base.multiplier;
-    if (!Number.isSafeInteger(packetQuantity)) throw new Error(`Packet quantity is too large for Shopify variant ${line.variantId}.`);
-    const key = `${base.productId}:${locationId}`;
-    const current = aggregate.get(key);
-    if (current) {
-      current.packetQuantity += packetQuantity;
-      current.sourceVariants.push({ variantId: line.variantId, inventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier });
-    } else {
-      aggregate.set(key, {
-        productId: base.productId,
-        productName: base.productName,
-        sku: base.sku,
-        warehouseLocationId: locationId,
-        packetQuantity,
-        sourceVariants: [{ variantId: line.variantId, inventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier }],
-      });
+    const parts = await packetProducts(mapping);
+    for (const [index, base] of parts.entries()) {
+      const locationId = await warehouseLocationId(base.productId, mapping.shopifyLocationName);
+      const packetQuantity = line.variantQuantity * base.multiplier;
+      if (!Number.isSafeInteger(packetQuantity)) throw new Error(`Packet quantity is too large for Shopify variant ${line.variantId}.`);
+      // Attach the Shopify listing once, so returns quarantine a combo listing a single time.
+      const sourceVariants = index === 0 ? [{ variantId: line.variantId, inventoryItemId: mapping.shopifyInventoryItemId, shopifyLocationId: mapping.shopifyLocationId, variantQuantity: line.variantQuantity, packetMultiplier: base.multiplier }] : [];
+      const key = `${base.productId}:${locationId}`;
+      const current = aggregate.get(key);
+      if (current) {
+        current.packetQuantity += packetQuantity;
+        current.sourceVariants.push(...sourceVariants);
+      } else {
+        aggregate.set(key, { productId: base.productId, productName: base.productName, sku: base.sku, warehouseLocationId: locationId, packetQuantity, sourceVariants });
+      }
     }
   }
   return [...aggregate.values()].sort((left, right) => `${left.productId}:${left.warehouseLocationId}`.localeCompare(`${right.productId}:${right.warehouseLocationId}`));

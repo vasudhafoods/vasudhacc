@@ -94,6 +94,19 @@ export const shopifyMappings = pgTable("shopify_mappings", {
   index("shopify_mappings_product_idx").on(table.productId),
 ]);
 
+// Combo recipe: the individual physical packets that one unit of a combo listing consumes.
+export const productBundleComponents = pgTable("product_bundle_components", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  bundleProductId: uuid("bundle_product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  componentProductId: uuid("component_product_id").notNull().references(() => products.id, { onDelete: "restrict" }),
+  quantity: integer("quantity").notNull(),
+  ...auditColumns,
+}, (table) => [
+  uniqueIndex("product_bundle_components_unique").on(table.bundleProductId, table.componentProductId),
+  check("product_bundle_components_quantity_positive", sql`${table.quantity} > 0`),
+  check("product_bundle_components_not_self", sql`${table.bundleProductId} <> ${table.componentProductId}`),
+]);
+
 export const inventoryBatches = pgTable("inventory_batches", {
   id: uuid("id").defaultRandom().primaryKey(),
   productId: uuid("product_id").notNull().references(() => products.id, { onDelete: "restrict" }),

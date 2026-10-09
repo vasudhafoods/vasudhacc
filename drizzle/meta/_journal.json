@@ -99,6 +99,13 @@
       "when": 1791561222797,
       "tag": "0013_brainy_albert_cleary",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791564360155,
+      "tag": "0014_product_bundle_components",
+      "breakpoints": true
     }
   ]
 }

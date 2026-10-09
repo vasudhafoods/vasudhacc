@@ -14,6 +14,10 @@ export function productPackMultiplier(name: string): number {
   return 1;
 }
 
+export function isBundleProduct(name: string): boolean {
+  return BUNDLE_NAME.test(name);
+}
+
 export function isPhysicalUnitProduct(name: string): boolean {
   return productPackMultiplier(name) === 1 && !BUNDLE_NAME.test(name);
 }
