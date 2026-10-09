@@ -2,6 +2,7 @@ import "server-only";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "./schema";
+import { installDateSerializers } from "./date-serializers";
 
 function databaseUrl(): string {
   const value = process.env.DATABASE_URL?.trim();
@@ -16,7 +17,9 @@ function createDatabase() {
     connect_timeout: 10,
     prepare: false,
   });
-  return drizzle({ client, schema });
+  const database = drizzle({ client, schema });
+  installDateSerializers(client);
+  return database;
 }
 
 let database: ReturnType<typeof createDatabase> | null = null;
