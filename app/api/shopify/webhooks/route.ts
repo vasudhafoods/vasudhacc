@@ -4,12 +4,16 @@ import {
   SHOPIFY_WEBHOOK_TOPICS,
   shopifyPayloadHash,
   type ShopifyWebhookTopic,
+  isQueuedForRetry,
   verifyShopifyWebhook,
 } from "@/services/shopify-webhooks";
+import { after } from "next/server";
 import { attemptAutomaticShopifySync } from "@/services/shopify-outbox";
+import { maintainShopifyAutomation } from "@/services/shopify-automation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -48,7 +52,19 @@ export async function POST(request: Request) {
     } catch {
       return json({ error: { code: "INVALID_JSON", message: "Webhook payload is not valid JSON." } }, 400);
     }
-    const result = await processShopifyWebhook({ eventId, topic, payloadHash: shopifyPayloadHash(rawBody), payload });
+    // Each delivery also runs the catch-up scan, so orders missed by any earlier delivery are applied.
+    after(async () => {
+      try { await maintainShopifyAutomation(request.url); }
+      catch { console.error("Shopify catch-up scan after webhook failed; next trigger will retry."); }
+    });
+    let result;
+    try {
+      result = await processShopifyWebhook({ eventId, topic, payloadHash: shopifyPayloadHash(rawBody), payload });
+    } catch (error) {
+      // Acknowledge saved events so Shopify does not drop the subscription; the retry loop applies them.
+      if (await isQueuedForRetry(eventId)) return json({ ok: false, queuedForRetry: true, message: error instanceof Error ? error.message : "Queued for retry." });
+      throw error;
+    }
     const shopifySync = result.transactionId && ["orders/create", "orders/cancelled", "refunds/create"].includes(topic)
       ? await attemptAutomaticShopifySync(result.transactionId, "pending")
       : "not_required";

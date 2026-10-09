@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { DASHBOARD_SESSION_COOKIE, readDashboardSession } from "@/lib/auth/session";
 import { isManagementRole, isRetailSalesRole, isWarehouseRole } from "@/types/auth";
 
-const INTERNAL_BEARER_ROUTES = ["/api/cron/inventory", "/api/inventory", "/api/inventory/history"];
+const INTERNAL_BEARER_ROUTES = ["/api/cron/inventory", "/api/cron/shopify-orders", "/api/inventory", "/api/inventory/history"];
 const SIGNED_PUBLIC_ROUTES = ["/api/shopify/webhooks"];
 
 export async function proxy(request: NextRequest) {

@@ -5,7 +5,7 @@ import { shopifySyncState, shopifyWebhookEvents } from "@/db/schema";
 import { shopifyGraphQL } from "@/lib/shopify/client";
 import { ORDER_RECOVERY_QUERY, recoveryPayloads, type RecoveryOrder } from "@/lib/shopify/order-recovery";
 import { ensureShopifyWebhookSubscriptions } from "./shopify-webhook-subscriptions";
-import { processShopifyWebhook, retryShopifyWebhookEvents, shopifyPayloadHash, type ShopifyWebhookTopic } from "./shopify-webhooks";
+import { isQueuedForRetry, processShopifyWebhook, retryShopifyWebhookEvents, shopifyPayloadHash, type ShopifyWebhookTopic } from "./shopify-webhooks";
 import { processShopifyOutbox } from "./shopify-outbox";
 
 const KEY = "orders";
@@ -57,8 +57,7 @@ export async function maintainShopifyAutomation(requestUrl?: string) {
           } catch (error) {
             const message = `Order ${order.name}: ${error instanceof Error ? error.message : "Recovery failed"}`;
             // A failed event saved with its payload is retried separately, so one bad order cannot stall the scan.
-            const [saved] = await db.select({ status: shopifyWebhookEvents.status }).from(shopifyWebhookEvents).where(sql`${shopifyWebhookEvents.shopifyEventId} = ${eventId} and ${shopifyWebhookEvents.payload} is not null`);
-            if (saved?.status !== "failed") throw new Error(message);
+            if (!await isQueuedForRetry(eventId)) throw new Error(message);
             errors.push(message);
           }
         };

@@ -549,6 +549,13 @@ export async function processShopifyWebhook(input: {
 }
 
 
+// True when a failed event is saved with its payload, so the retry loop will apply it later.
+export async function isQueuedForRetry(eventId: string): Promise<boolean> {
+  const [saved] = await getDatabase().select({ status: shopifyWebhookEvents.status }).from(shopifyWebhookEvents)
+    .where(and(eq(shopifyWebhookEvents.shopifyEventId, eventId), sql`${shopifyWebhookEvents.payload} is not null`)).limit(1);
+  return saved?.status === "failed";
+}
+
 export async function retryShopifyWebhookEvents(limit = 20) {
   const db = getDatabase();
   const staleBefore = new Date(Date.now() - 10 * 60 * 1000);

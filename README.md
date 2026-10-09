@@ -96,6 +96,8 @@ Vercel Cron calls `GET /api/cron/inventory` at `02:30 UTC`, or `08:00 IST`, ever
 
 Vercel Hobby runs daily cron jobs with hourly rather than minute-level precision, so the free plan delivers this around 8:00 AM IST. Exact-minute scheduling requires Vercel Pro or an external scheduler.
 
+Shopify orders deduct stock in real time through webhooks. As a backstop that does not depend on an open dashboard, schedule an external every-minute job (for example cron-job.org) to call `GET /api/cron/shopify-orders` with `Authorization: Bearer <CRON_SECRET>`. It only runs the order catch-up scan and failed-event retries, so it is safe to call frequently.
+
 Running the cron more than once on the same day safely replaces that day's snapshot. When `CRON_SECRET` is configured in Vercel, scheduled requests include it as a bearer token.
 
 Each attempt also writes a run record to Neon. Dashboard settings are stored in the same database.
@@ -106,6 +108,7 @@ Protected diagnostic endpoints:
 GET /api/inventory
 GET /api/inventory/history
 GET /api/cron/inventory
+GET /api/cron/shopify-orders
 ```
 
 Each requires `Authorization: Bearer <CRON_SECRET>`.
