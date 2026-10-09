@@ -188,6 +188,11 @@ type MappingRow = {
   status: "mapped" | "missing_sku" | "conflict" | "inactive";
 };
 
+async function isMappedVariant(variantId: string): Promise<boolean> {
+  const [row] = await getDatabase().select({ id: shopifyMappings.id }).from(shopifyMappings).where(eq(shopifyMappings.shopifyVariantId, variantId)).limit(1);
+  return Boolean(row);
+}
+
 async function variantMapping(variantId: string, locationId: string | null): Promise<MappingRow> {
   const db = getDatabase();
   const rows = await db.select({
@@ -277,6 +282,8 @@ async function packetProducts(mapping: MappingRow): Promise<{ productId: string;
 async function resolveMovements(lines: RawMovement[]): Promise<ResolvedMovement[]> {
   const aggregate = new Map<string, ResolvedMovement>();
   for (const line of lines) {
+    // The catalog sync skips Shopify variants without a SKU, so they are untracked here too.
+    if (!line.sku && !await isMappedVariant(line.variantId)) continue;
     const mapping = await variantMapping(line.variantId, line.shopifyLocationId);
     const parts = await packetProducts(mapping);
     for (const [index, base] of parts.entries()) {
