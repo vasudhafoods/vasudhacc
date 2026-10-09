@@ -489,7 +489,7 @@ export async function processShopifyWebhook(input: {
     eq(shopifyWebhookEvents.id, event.id),
     or(
       inArray(shopifyWebhookEvents.status, ["pending", "failed"]),
-      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore}`),
+      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore.toISOString()}::timestamptz`),
     ),
   )).returning({ id: shopifyWebhookEvents.id });
   if (!claimed) return { duplicate: true, ignored: false, transactionId: null, transactionNumber: null, packetQuantity: 0 };
@@ -545,7 +545,7 @@ export async function retryShopifyWebhookEvents(limit = 20) {
   const events = await db.select().from(shopifyWebhookEvents).where(and(
     sql`${shopifyWebhookEvents.payload} is not null`,
     or(inArray(shopifyWebhookEvents.status, ["pending", "failed"]),
-      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore}`)),
+      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore.toISOString()}::timestamptz`)),
   )).orderBy(sql`${shopifyWebhookEvents.processedAt} asc nulls first`, shopifyWebhookEvents.createdAt).limit(limit);
   let succeeded = 0, failed = 0;
   for (const event of events) {

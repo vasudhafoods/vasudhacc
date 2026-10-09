@@ -74,6 +74,6 @@ export async function maintainShopifyAutomation(requestUrl?: string) {
     await db.update(shopifySyncState).set({ lastError: error instanceof Error ? error.message.slice(0, 2000) : "Automatic synchronization failed; retry pending." }).where(eq(shopifySyncState.key, KEY));
     throw error;
   } finally {
-    await db.update(shopifySyncState).set({ lockedUntil: new Date(Date.now() + 60_000) }).where(sql`${shopifySyncState.key} = ${KEY} and ${shopifySyncState.lockedUntil} = ${leaseUntil}`);
+    await db.update(shopifySyncState).set({ lockedUntil: new Date(Date.now() + 60_000) }).where(sql`${shopifySyncState.key} = ${KEY} and ${shopifySyncState.lockedUntil} = ${leaseUntil.toISOString()}::timestamptz`);
   }
 }
