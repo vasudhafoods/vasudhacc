@@ -2,13 +2,14 @@
 
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { WarehouseStockCondition } from "@/components/warehouse/warehouse-stock-condition";
 import { WarehouseReturnDisposal } from "@/components/warehouse/warehouse-return-disposal";
 import { WarehouseOrdersPanel } from "@/components/warehouse/warehouse-orders-panel";
 import { receiptAllocation } from "@/lib/inventory/allocation";
 import type { DashboardRole } from "@/types/auth";
 import type { ShopifySyncStatus, WarehouseInventoryBucket, WarehouseProductOption, WarehouseWorkspaceData } from "@/types/warehouse";
 
-type Panel = "dashboard" | "orders" | "receive" | "dispatch" | "returns" | "disposal" | "product" | "activity";
+type Panel = "stock-condition" | "dashboard" | "orders" | "receive" | "dispatch" | "returns" | "disposal" | "product" | "activity";
 type Step = "edit" | "review" | "success";
 
 interface ReceiptDraft {
@@ -518,12 +519,17 @@ export function WarehouseWorkspace({ user, initialData }: {
 
   const inputClass = "h-12 w-full rounded-xl border border-slate-300 bg-white px-3.5 text-base text-slate-900 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100";
   const stockDashboardRows = initialData.locations.flatMap((location) => {
-    const grouped = new Map<string, { name: string; category: string; total: number }>();
+    const grouped = new Map<string, { name: string; category: string; total: number; saleable: number; qc: number; damaged: number }>();
     for (const product of initialData.products) {
       const baseName = product.name.replace(/\s*[·|–—-]\s*pack\s+of\s+\d+\b.*$/i, "").trim() || product.name;
       const key = baseName.toLocaleLowerCase();
-      const row = grouped.get(key) ?? { name: baseName, category: product.category, total: 0 };
-      row.total += initialData.balances.filter((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id && balance.bucket !== "damaged").reduce((sum, balance) => sum + balance.onHand, 0);
+      const row = grouped.get(key) ?? { name: baseName, category: product.category, total: 0, saleable: 0, qc: 0, damaged: 0 };
+      for (const balance of initialData.balances.filter((balance) => balance.productId === product.id && balance.warehouseLocationId === location.id)) {
+        row.total += balance.onHand;
+        if (balance.bucket === "damaged") row.damaged += balance.onHand;
+        else if (balance.bucket === "qc") row.qc += balance.onHand;
+        else row.saleable += balance.onHand;
+      }
       grouped.set(key, row);
     }
     return [...grouped.values()].filter((row) => row.total > 0 || initialData.locations.length === 1).map((row) => ({ ...row, locationName: location.name }));
@@ -545,6 +551,7 @@ export function WarehouseWorkspace({ user, initialData }: {
         ["disposal", "6", "Disposal", "Record removed stock"],
         ["product", "7", "Add new product", "Create a product record"],
         ["activity", "8", "My updates", "Check what you submitted"],
+        ["stock-condition", "9", "Damaged & QC / Hold", "View buckets and move stock"],
       ] as const).map(([key, number, title, subtitle]) => <button key={key} type="button" onClick={() => changePanel(key)} className={`flex min-h-20 items-center gap-3 rounded-2xl border p-4 text-left transition ${panel === key ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-emerald-300"}`}>
         <span className={`grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold ${panel === key ? "bg-brand-primary text-white" : "bg-slate-100 text-slate-600"}`}>{number}</span>
         <span><span className="block text-sm font-bold text-slate-900">{title}</span><span className="mt-0.5 block text-xs text-slate-500">{subtitle}</span></span>
@@ -552,12 +559,12 @@ export function WarehouseWorkspace({ user, initialData }: {
     </nav>
 
     {panel === "dashboard" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">View only</p><h2 className="mt-1 text-xl font-bold text-slate-950">Stock dashboard</h2><p className="mt-1 text-sm text-slate-500">Current inventory by product and warehouse. Stock changes are made through Receive stock or Deliver stock.</p></div>
+      <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">View only</p><h2 className="mt-1 text-xl font-bold text-slate-950">Stock dashboard</h2><p className="mt-1 text-sm text-slate-500">Current physical stock by product and warehouse, including reserved packets. Saleable stock excludes Damaged and QC / Hold.</p></div>
       <div className="space-y-6 p-5 sm:p-7">
         <button type="button" onClick={() => changePanel("orders")} className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-left hover:bg-emerald-50"><span><span className="block font-bold text-slate-900">Sales orders to prepare</span><span className="mt-1 block text-xs text-slate-600">Open the Orders page to track Shopify and Retail orders.</span></span><span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">{initialData.salesOrders.filter((order) => !["delivered", "cancelled"].includes(order.deliveryStatus)).length} active →</span></button>
-        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[520px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Warehouse</th><th className="px-4 py-3 text-right">Units</th></tr></thead><tbody>
-          {stockDashboardRows.map((row) => <tr key={`${row.name}-${row.locationName}`} className="border-t border-slate-100"><td className="px-4 py-3"><span className="block font-semibold text-slate-900">{row.name}</span><span className="text-xs capitalize text-slate-500">{row.category}</span></td><td className="px-4 py-3 text-slate-600">{row.locationName}</td><td className="px-4 py-3 text-right text-lg font-bold tabular-nums text-slate-950">{row.total}</td></tr>)}
-          {!initialData.products.length ? <tr><td className="px-4 py-10 text-center text-slate-500" colSpan={3}>No active products yet.</td></tr> : null}
+        <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Product</th><th className="px-4 py-3">Warehouse</th><th className="px-4 py-3 text-right">Saleable</th><th className="px-4 py-3 text-right">QC / Hold</th><th className="px-4 py-3 text-right">Damaged</th><th className="px-4 py-3 text-right">Total physical</th></tr></thead><tbody>
+          {stockDashboardRows.map((row) => <tr key={`${row.name}-${row.locationName}`} className="border-t border-slate-100"><td className="px-4 py-3"><span className="block font-semibold text-slate-900">{row.name}</span><span className="text-xs capitalize text-slate-500">{row.category}</span></td><td className="px-4 py-3 text-slate-600">{row.locationName}</td><td className="px-4 py-3 text-right font-semibold tabular-nums">{row.saleable}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-amber-800">{row.qc}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-red-700">{row.damaged}</td><td className="px-4 py-3 text-right text-lg font-bold tabular-nums text-slate-950">{row.total}</td></tr>)}
+          {!initialData.products.length ? <tr><td className="px-4 py-10 text-center text-slate-500" colSpan={6}>No active products yet.</td></tr> : null}
         </tbody></table></div>
       </div>
     </section> : null}
@@ -675,8 +682,10 @@ export function WarehouseWorkspace({ user, initialData }: {
       </div>
     </section> : null}
 
+    {panel === "stock-condition" ? <WarehouseStockCondition data={initialData} onDispose={() => changePanel("disposal")}/> : null}
+
     {panel === "returns" ? <WarehouseReturnDisposal kind="return" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries} userRole={user.role}/> : null}
-    {panel === "disposal" ? <WarehouseReturnDisposal kind="disposal" products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries} userRole={user.role}/> : null}
+    {panel === "disposal" ? <WarehouseReturnDisposal kind="disposal" onManageStock={() => changePanel("stock-condition")} products={initialData.products} locations={initialData.locations} balances={initialData.balances} expiries={initialData.expiries} userRole={user.role}/> : null}
 
     {panel === "product" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-5 py-5 sm:px-7"><p className="text-xs font-semibold uppercase tracking-[.14em] text-emerald-700">{productStep === "edit" ? "Step 1 of 2 · Enter" : productStep === "review" ? "Step 2 of 2 · Review" : "Completed"}</p><h2 className="mt-1 text-xl font-bold text-slate-950">{productStep === "success" ? "Product created successfully" : "Add a new product"}</h2><p className="mt-1 text-sm text-slate-500">Use this only when the SKU is not already in the product list.</p></div>
