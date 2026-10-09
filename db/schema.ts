@@ -310,6 +310,8 @@ export const shopifyWebhookEvents = pgTable("shopify_webhook_events", {
   shopifyEventId: text("shopify_event_id").notNull(),
   topic: text("topic").notNull(),
   payloadHash: text("payload_hash").notNull(),
+  payload: jsonb("payload").$type<unknown>(),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
   status: integrationStatus("status").default("pending").notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
   lastError: text("last_error"),
@@ -368,3 +370,16 @@ export const inventorySnapshotRuns = pgTable("inventory_snapshot_runs", {
 export type InventoryBucket = (typeof inventoryBucket.enumValues)[number];
 export type InventoryTransactionType = (typeof inventoryTransactionType.enumValues)[number];
 export type StaffRole = (typeof staffRole.enumValues)[number];
+
+// Singleton lease and recovery checkpoint for automatic Shopify order synchronization.
+export const shopifySyncState = pgTable("shopify_sync_state", {
+  key: text("key").primaryKey(),
+  enabledAt: timestamp("enabled_at", { withTimezone: true }).defaultNow().notNull(),
+  checkedThrough: timestamp("checked_through", { withTimezone: true }),
+  cursor: text("cursor"),
+  scanUntil: timestamp("scan_until", { withTimezone: true }),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  subscriptionsCheckedAt: timestamp("subscriptions_checked_at", { withTimezone: true }),
+  lastSucceededAt: timestamp("last_succeeded_at", { withTimezone: true }),
+  lastError: text("last_error"),
+});

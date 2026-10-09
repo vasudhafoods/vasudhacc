@@ -19,6 +19,7 @@ export async function proxy(request: NextRequest) {
     }
     return NextResponse.next();
   }
+  if (session && pathname === "/api/shopify/automation") return NextResponse.next();
   if (session && isWarehouseRole(session.role)) {
     const isOfflineSalesDocumentRoute = /^\/api\/offline-sales\/[^/]+\/documents(?:\/[^/]+)?$/.test(pathname);
     if (pathname === "/warehouse" || pathname.startsWith("/warehouse/") || pathname.startsWith("/api/warehouse/") || isOfflineSalesDocumentRoute) return NextResponse.next();

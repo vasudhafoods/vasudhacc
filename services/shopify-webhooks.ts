@@ -1,6 +1,6 @@
 import "server-only";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { and, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import {
   auditEvents,
@@ -14,6 +14,7 @@ import {
   warehouseLocations,
 } from "@/db/schema";
 import { getShopifyConfig } from "@/lib/validation/env";
+import { inventoryWebhookPayload } from "@/lib/shopify/webhook-payload";
 import { targetChannelBalances } from "@/lib/inventory/stock-rotation";
 
 export const SHOPIFY_WEBHOOK_TOPICS = ["orders/create", "orders/cancelled", "fulfillments/create", "refunds/create"] as const;
@@ -476,6 +477,7 @@ export async function processShopifyWebhook(input: {
     shopifyEventId: input.eventId,
     topic: input.topic,
     payloadHash: input.payloadHash,
+    payload: inventoryWebhookPayload(input.payload),
   }).onConflictDoNothing({ target: shopifyWebhookEvents.shopifyEventId });
   const [event] = await db.select().from(shopifyWebhookEvents).where(eq(shopifyWebhookEvents.shopifyEventId, input.eventId)).limit(1);
   if (!event) throw new Error("Shopify webhook event could not be recorded.");
@@ -483,16 +485,20 @@ export async function processShopifyWebhook(input: {
   if (event.status === "succeeded") return { duplicate: true, ignored: false, transactionId: null, transactionNumber: null, packetQuantity: 0 };
 
   const staleBefore = new Date(Date.now() - 10 * 60 * 1_000);
-  const [claimed] = await db.update(shopifyWebhookEvents).set({ status: "processing", lastError: null }).where(and(
+  const [claimed] = await db.update(shopifyWebhookEvents).set({ status: "processing", lastError: null, lockedAt: new Date() }).where(and(
     eq(shopifyWebhookEvents.id, event.id),
     or(
       inArray(shopifyWebhookEvents.status, ["pending", "failed"]),
-      and(eq(shopifyWebhookEvents.status, "processing"), lt(shopifyWebhookEvents.createdAt, staleBefore)),
+      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore}`),
     ),
   )).returning({ id: shopifyWebhookEvents.id });
   if (!claimed) return { duplicate: true, ignored: false, transactionId: null, transactionNumber: null, packetQuantity: 0 };
 
   try {
+    if ((input.payload as { test?: boolean })?.test === true) {
+      await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), payload: null }).where(eq(shopifyWebhookEvents.id, event.id));
+      return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
+    }
     const extracted = extractMovements(input.topic, input.payload);
     if (input.topic === "orders/cancelled") {
       const [orderReceipt] = await db.select({ id: inventoryTransactions.id }).from(inventoryTransactions)
@@ -508,7 +514,7 @@ export async function processShopifyWebhook(input: {
           reason: "Shopify order cancelled before inventory receipt was recorded",
           metadata: { topic: input.topic, cancelledBeforeReceipt: true },
         }).onConflictDoNothing({ target: inventoryTransactions.idempotencyKey });
-        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null }).where(eq(shopifyWebhookEvents.id, event.id));
+        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null, payload: null, lockedAt: null }).where(eq(shopifyWebhookEvents.id, event.id));
         return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
       }
     }
@@ -516,18 +522,37 @@ export async function processShopifyWebhook(input: {
       const [cancellation] = await db.select({ id: inventoryTransactions.id }).from(inventoryTransactions)
         .where(eq(inventoryTransactions.idempotencyKey, `shopify-order:cancel:${extracted.orderId}`)).limit(1);
       if (cancellation) {
-        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null }).where(eq(shopifyWebhookEvents.id, event.id));
+        await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null, payload: null, lockedAt: null }).where(eq(shopifyWebhookEvents.id, event.id));
         return { duplicate: false, ignored: true, transactionId: null, transactionNumber: null, packetQuantity: 0 };
       }
     }
     const movements = await resolveMovements(extracted.lines);
     const result = await applyInventoryMovement(input.topic, extracted.externalId, extracted.orderId, extracted.direction, movements);
-    await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null })
+    await db.update(shopifyWebhookEvents).set({ status: "succeeded", processedAt: new Date(), lastError: null, payload: null, lockedAt: null })
       .where(eq(shopifyWebhookEvents.id, event.id));
     return result;
   } catch (error) {
-    await db.update(shopifyWebhookEvents).set({ status: "failed", processedAt: new Date(), lastError: cleanError(error) })
+    await db.update(shopifyWebhookEvents).set({ status: "failed", processedAt: new Date(), lastError: cleanError(error), lockedAt: null })
       .where(eq(shopifyWebhookEvents.id, event.id));
     throw error;
   }
+}
+
+
+export async function retryShopifyWebhookEvents(limit = 20) {
+  const db = getDatabase();
+  const staleBefore = new Date(Date.now() - 10 * 60 * 1000);
+  const events = await db.select().from(shopifyWebhookEvents).where(and(
+    sql`${shopifyWebhookEvents.payload} is not null`,
+    or(inArray(shopifyWebhookEvents.status, ["pending", "failed"]),
+      and(eq(shopifyWebhookEvents.status, "processing"), sql`coalesce(${shopifyWebhookEvents.lockedAt}, ${shopifyWebhookEvents.createdAt}) < ${staleBefore}`)),
+  )).orderBy(sql`${shopifyWebhookEvents.processedAt} asc nulls first`, shopifyWebhookEvents.createdAt).limit(limit);
+  let succeeded = 0, failed = 0;
+  for (const event of events) {
+    try {
+      await processShopifyWebhook({ eventId: event.shopifyEventId, topic: event.topic as ShopifyWebhookTopic, payloadHash: event.payloadHash, payload: event.payload });
+      succeeded++;
+    } catch { failed++; }
+  }
+  return { examined: events.length, succeeded, failed };
 }

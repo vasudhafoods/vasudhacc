@@ -19,6 +19,13 @@ interface WebhookSubscriptionResult {
 
 export function ShopifyCatalogSync({ initialStatus }: { initialStatus: WarehouseFoundationStatus }) {
   const router = useRouter();
+  const [automation, setAutomation] = useState<{ subscriptionsCheckedAt?: string; lastEventAt?: string; checkedThrough?: string; error?: string; failed?: number } | null>(null);
+  useEffect(() => {
+    let active = true;
+    const read = async () => { try { const response = await fetch("/api/shopify/automation"); if (response.ok && active) setAutomation(await response.json()); } catch { /* Next automatic check retries. */ } };
+    void read(); const timer = window.setInterval(read, 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState<CatalogSyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -66,9 +73,15 @@ export function ShopifyCatalogSync({ initialStatus }: { initialStatus: Warehouse
       <div>
         <p className="text-xs font-semibold uppercase tracking-[.12em] text-emerald-700">Shopify integration</p>
         <h2 className="mt-1 text-sm font-semibold text-slate-900">Automatic Shopify synchronization</h2>
-        <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">New Online stock is sent to Shopify immediately. Verified Shopify fulfillments reduce the Online packet ledger, while fulfilled returns add packets back. The daily job maintains subscriptions, refreshes mappings, and retries interrupted stock writes.</p>
+        <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">Shopify orders automatically deduct packet stock when received; fulfillment does not deduct it again. Cancellations restore unfulfilled stock, and returned packets go to QC. Webhooks work even when this dashboard is closed. While it is open, recovery checks and stock refreshes run every minute; the daily job is a backup. No manual order sync is required.</p>
       </div>
-      <button onClick={syncCatalog} disabled={!ready || syncing} className="shrink-0 rounded-lg bg-brand-primary px-4 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{syncing ? "Synchronizing…" : "Sync Shopify now"}</button>
+      <button onClick={syncCatalog} disabled={!ready || syncing} className="shrink-0 rounded-lg bg-brand-primary px-4 py-2.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{syncing ? "Synchronizing…" : "Refresh product catalog"}</button>
+    </div>
+    <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+      <p className="font-semibold">{automation?.error ? "Automatic sync needs attention" : automation?.subscriptionsCheckedAt ? "Live order webhooks connected" : "Checking automatic order connection…"}</p>
+      {automation?.subscriptionsCheckedAt ? <p className="mt-1">Connection last verified: {new Date(automation.subscriptionsCheckedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}</p> : null}
+      <p className="mt-1">Last processed event: {automation?.lastEventAt ? new Date(automation.lastEventAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "No event processed yet"}</p>
+      {automation?.error ? <p role="alert" className="mt-2 text-red-700">{automation.error}</p> : null}
     </div>
     <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <Status label="Database" value={initialStatus.initialized ? "Ready" : initialStatus.configured ? "Migration required" : "Not configured"}/>
