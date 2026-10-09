@@ -1,3 +1,4 @@
+import { normalizeInvoiceNumber } from "@/lib/sales/invoice-number";
 import "server-only";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
@@ -72,7 +73,7 @@ export async function amendOrder(saleId: string, actor: Actor, body: Record<stri
       const billingAddress = clean(body.billingAddress, "Billing address", 5, 500);
       const gstNumber = clean(body.gstNumber ?? "", "GSTIN", 0, 15).toUpperCase();
       if (gstNumber && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstNumber)) fail("Enter a valid GSTIN or leave it blank.");
-      changes = { ...totals, lines, saleDate: new Date(`${date(body.saleDate, "Invoice date")}T12:00:00+05:30`), billingInvoiceNumber: clean(body.billingInvoiceNumber, "Invoice number", 2, 100), customerName: clean(body.customerName, "Customer name", 2, 160), customerCompanyName: clean(body.customerCompanyName ?? "", "Company name", 0, 160) || null, customerContact: clean(body.customerContact ?? "", "Contact", 0, 80) || null, billingAddress, shippingSameAsBilling: body.shippingSameAsBilling === true, shippingAddress: body.shippingSameAsBilling === true ? billingAddress : clean(body.shippingAddress, "Shipping address", 5, 500), gstNumber: gstNumber || null, notes: clean(body.notes ?? "", "Notes", 0, 1000) || null, requestedDispatchDate: body.requestedDispatchDate ? date(body.requestedDispatchDate, "Requested dispatch date") : null };
+      changes = { ...totals, lines, saleDate: new Date(`${date(body.saleDate, "Invoice date")}T12:00:00+05:30`), billingInvoiceNumber: normalizeInvoiceNumber(clean(body.billingInvoiceNumber, "Invoice number", 2, 100)), customerName: clean(body.customerName, "Customer name", 2, 160), customerCompanyName: clean(body.customerCompanyName ?? "", "Company name", 0, 160) || null, customerContact: clean(body.customerContact ?? "", "Contact", 0, 80) || null, billingAddress, shippingSameAsBilling: body.shippingSameAsBilling === true, shippingAddress: body.shippingSameAsBilling === true ? billingAddress : clean(body.shippingAddress, "Shipping address", 5, 500), gstNumber: gstNumber || null, notes: clean(body.notes ?? "", "Notes", 0, 1000) || null, requestedDispatchDate: body.requestedDispatchDate ? date(body.requestedDispatchDate, "Requested dispatch date") : null };
     }
     const newLines = action === "edit" ? changes.lines! : [];
     const oldQuantities = new Map<string, number>();

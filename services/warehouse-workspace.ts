@@ -78,7 +78,7 @@ export async function getWarehouseWorkspaceData(actorUsername: string, includeAl
       db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
     ]).then(async ([orders, paymentRows]) => {
       const documentRows = await db.select({ offlineSaleId: offlineSaleDocuments.offlineSaleId, kind: offlineSaleDocuments.kind, fileName: offlineSaleDocuments.fileName, id: offlineSaleDocuments.id })
-        .from(offlineSaleDocuments).where(inArray(offlineSaleDocuments.kind, ["tracking_slip", "proof_of_delivery"])).orderBy(desc(offlineSaleDocuments.createdAt));
+        .from(offlineSaleDocuments).where(inArray(offlineSaleDocuments.kind, ["invoice", "tracking_slip", "proof_of_delivery"])).orderBy(desc(offlineSaleDocuments.createdAt));
       return { orders, paymentRows, documentRows, migrationPending: false };
     }).catch((error: unknown) => {
       let cause = error as { code?: string; cause?: unknown };

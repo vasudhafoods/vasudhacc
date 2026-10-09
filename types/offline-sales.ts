@@ -9,6 +9,7 @@ export interface OfflineSaleRow {
   customerCompanyName?: string | null;
   customerContact: string | null;
   billingInvoiceNumber: string | null;
+  hasInvoice?: boolean;
   billingAddress: string;
   shippingAddress: string;
   shippingSameAsBilling: boolean;

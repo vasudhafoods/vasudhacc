@@ -87,7 +87,7 @@ export function OrderAmendments({ sale, products }: { sale: OfflineSaleRow; prod
         {mode === "cancel" ? <><p className="text-sm">Cancel this order and release its reserved stock. The order will remain in the database.</p>{sale.collectedAmountPaisa > 0 ? <p className="text-sm text-amber-800">Payments of {money(sale.collectedAmountPaisa)} are retained; cancellation does not issue a refund.</p> : null}</> : <>
           <p className="text-xs text-slate-600">Edits are allowed before dispatch. Existing payments and the preparing warehouse stay attached to this order. Discount percentages below include any original invoice discount.</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-sm">Invoice number<input name="billingInvoiceNumber" defaultValue={current.billingInvoiceNumber ?? ""} className={input} required minLength={2} maxLength={100}/></label>
+            <label className="text-sm">Invoice number<input name="billingInvoiceNumber" defaultValue={current.billingInvoiceNumber ?? "NA"} className={input} required minLength={2} maxLength={100}/></label>
             <label className="text-sm">Invoice date<input name="saleDate" type="date" defaultValue={date(current.saleDate)} className={input} required/></label>
             <label className="text-sm">Customer<input name="customerName" defaultValue={current.customerName} className={input} required minLength={2} maxLength={160}/></label>
             <label className="text-sm">Company<input name="customerCompanyName" defaultValue={current.customerCompanyName ?? ""} className={input} maxLength={160}/></label>

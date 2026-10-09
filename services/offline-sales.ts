@@ -1,3 +1,4 @@
+import { normalizeInvoiceNumber } from "@/lib/sales/invoice-number";
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
@@ -216,20 +217,22 @@ export async function getOfflineSalesOverview(range: { from: string; to: string 
   const to = rangeBoundary(range.to, "end");
   if (from > to) throw new OfflineSalesError("INVALID_SALE", "The reporting start date must be before the end date.");
   const db = getDatabase();
-  const [allSales, allCollections, periodSales, periodCollections, amendments] = await Promise.all([
+  const [allSales, allCollections, periodSales, periodCollections, amendments, invoices] = await Promise.all([
     db.select().from(offlineSales).orderBy(desc(offlineSales.saleDate)),
     db.select({ offlineSaleId: offlineSaleCollections.offlineSaleId, amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections),
     db.select().from(offlineSales).where(and(gte(offlineSales.saleDate, from), lte(offlineSales.saleDate, to))).orderBy(desc(offlineSales.saleDate)),
     db.select({ amountPaisa: offlineSaleCollections.amountPaisa }).from(offlineSaleCollections).where(and(gte(offlineSaleCollections.collectedAt, from), lte(offlineSaleCollections.collectedAt, to))),
     db.select({ entityId: auditEvents.entityId, action: auditEvents.action, reason: auditEvents.reason, createdAt: auditEvents.createdAt }).from(auditEvents).where(and(eq(auditEvents.entityType, "offline_sale"), inArray(auditEvents.action, ["offline_sale.corrected", "offline_sale.cancelled"]))).orderBy(auditEvents.createdAt),
+    db.selectDistinct({ offlineSaleId: offlineSaleDocuments.offlineSaleId }).from(offlineSaleDocuments).where(eq(offlineSaleDocuments.kind, "invoice")),
   ]);
+  const invoiceSaleIds = new Set(invoices.map(document => document.offlineSaleId));
   const collectionsBySale = mapCollections(allCollections);
   const allRows = allSales.map((sale) => {
     const history = amendments.filter(event => event.entityId === sale.id);
     const corrections = history.filter(event => event.action === "offline_sale.corrected");
-    return { ...toRow(sale, collectionsBySale.get(sale.id) ?? 0), correctionCount: corrections.length, lastCorrectedAt: corrections.at(-1)?.createdAt.toISOString() ?? null, cancellationNote: history.find(event => event.action === "offline_sale.cancelled")?.reason ?? null };
+    return { ...toRow(sale, collectionsBySale.get(sale.id) ?? 0), hasInvoice: invoiceSaleIds.has(sale.id), correctionCount: corrections.length, lastCorrectedAt: corrections.at(-1)?.createdAt.toISOString() ?? null, cancellationNote: history.find(event => event.action === "offline_sale.cancelled")?.reason ?? null };
   });
-  const periodRows = periodSales.map((sale) => toRow(sale, collectionsBySale.get(sale.id) ?? 0));
+  const periodRows = periodSales.map((sale) => ({ ...toRow(sale, collectionsBySale.get(sale.id) ?? 0), hasInvoice: invoiceSaleIds.has(sale.id) }));
   const salesAmountPaisa = periodRows.filter(sale => sale.deliveryStatus !== "cancelled").reduce((sum, sale) => sum + sale.totalAmountPaisa, 0);
   const collectedAmountPaisa = periodCollections.reduce((sum, collection) => sum + collection.amountPaisa, 0);
   const outstandingSales = allRows.filter((sale) => sale.pendingAmountPaisa > 0).sort((left, right) => right.pendingAmountPaisa - left.pendingAmountPaisa || right.saleDate.localeCompare(left.saleDate));
@@ -283,8 +286,7 @@ export async function createOfflineSale(input: {
 }): Promise<{ sale: OfflineSaleRow; duplicate: boolean; stockTransferTransactionId: string | null; stockTransfers: { productId: string; movedFromBuffer: number; movedFromOnline: number }[] }> {
   if (!input.idempotencyKey || input.idempotencyKey.length > 200) throw new OfflineSalesError("INVALID_SALE", "A valid submission key is required. Please try again.");
   const date = saleDate(input.saleDate);
-  const billingInvoiceNumber = text(input.billingInvoiceNumber, "Billing invoice number", 2, 100, true)!;
-  if (!input.invoiceFileName?.trim()) throw new OfflineSalesError("INVALID_SALE", "Upload the invoice copy before submitting the order.");
+  const billingInvoiceNumber = normalizeInvoiceNumber(text(input.billingInvoiceNumber, "Billing invoice number", 2, 100, true)!);
   const customerName = text(input.customerName, "Customer name", 2, 160, true)!;
   const customerCompanyName = text(input.customerCompanyName, "Company name", 2, 160);
   const customerContact = text(input.customerContact, "Customer contact", 3, 80);
@@ -345,7 +347,7 @@ export async function createOfflineSale(input: {
   const dateKey = input.saleDate.replaceAll("-", "");
   const saleNumber = `OFF-${dateKey}-${randomUUID().slice(0, 8).toUpperCase()}`;
   return db.transaction(async (tx) => {
-    const existingInvoice = await tx.select({ id: offlineSales.id }).from(offlineSales).where(and(eq(offlineSales.billingInvoiceNumber, billingInvoiceNumber), ne(offlineSales.deliveryStatus, "cancelled"))).limit(1);
+    const existingInvoice = billingInvoiceNumber ? await tx.select({ id: offlineSales.id }).from(offlineSales).where(and(eq(offlineSales.billingInvoiceNumber, billingInvoiceNumber), ne(offlineSales.deliveryStatus, "cancelled"))).limit(1) : [];
     if (existingInvoice[0]) throw new OfflineSalesError("INVALID_SALE", "That billing invoice number belongs to an order that has not been cancelled.");
     const productIds = lines.map((line) => line.productId);
     const catalog = await tx.select({ id: products.id, name: products.name, active: products.active }).from(products).where(inArray(products.id, productIds));
@@ -416,7 +418,7 @@ export async function createOfflineSale(input: {
     const stockTransfers = stockPlans.map((plan) => ({ productId: plan.line.productId, movedFromBuffer: plan.movedFromBuffer, movedFromOnline: plan.movedFromOnline }));
     const hasTransfers = stockPlans.some((plan) => plan.movedFromBuffer > 0 || plan.movedFromOnline > 0 || plan.rotation.online !== plan.online.onHand || plan.rotation.retail !== plan.retail.onHand || plan.rotation.buffer !== plan.buffer.onHand);
     let stockTransferTransactionId: string | null = null;
-    let transferLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
+    const transferLines: (typeof inventoryTransactionLines.$inferInsert)[] = [];
     const transferPrevious: Record<string, number> = {};
     const transferNext: Record<string, number> = {};
     if (hasTransfers) {
@@ -425,7 +427,7 @@ export async function createOfflineSale(input: {
         transactionNumber: transferNumber,
         type: "channel_transfer",
         idempotencyKey: `${input.idempotencyKey}:retail-replenish`,
-        referenceId: billingInvoiceNumber,
+        referenceId: billingInvoiceNumber ?? saleNumber,
         actorUsername: input.actorUsername,
         reason: "Retail sales order replenishment from Buffer and Online stock",
         occurredAt: date,
